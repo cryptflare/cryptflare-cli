@@ -1,0 +1,50 @@
+name: Smoke
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Specific version to install (defaults to latest)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    name: Install + run (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Wait for npm registry to index
+        if: github.event_name == 'workflow_run'
+        run: sleep 30
+        shell: bash
+
+      - name: Install
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            npm install -g "@cryptflare/cli@${{ inputs.version }}"
+          else
+            npm install -g "@cryptflare/cli@latest"
+          fi
+
+      - name: Verify cf binary works
+        shell: bash
+        run: |
+          cf --version
+          cf --help
+          cf secrets --help

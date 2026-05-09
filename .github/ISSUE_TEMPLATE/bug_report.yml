@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a defect in the CLI
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Search existing issues first.
+        For security vulnerabilities, email security@cryptflare.com - do not open a public issue.
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI version
+      description: Output of `cf --version`.
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      placeholder: v20.11.1
+    validations:
+      required: true
+  - type: input
+    id: install-method
+    attributes:
+      label: Install method
+      placeholder: npm i -g, brew, npx, etc.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 14.4, Ubuntu 22.04, Windows 11, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Exact commands run + relevant config files (cryptflare.json, .env).
+        Strip any tokens, IDs, secrets - replace with placeholders.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output / stack trace
+      render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and could not find a duplicate.
+          required: true
+        - label: I redacted secrets, tokens, and PII from the report.
+          required: true

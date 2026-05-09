@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://cryptflare.com/cli
+    about: Read the official CLI documentation before opening an issue.
+  - name: Security report
+    url: mailto:security@cryptflare.com
+    about: Report a vulnerability privately. Do not open a public issue.
+  - name: Support
+    url: mailto:support@cryptflare.com
+    about: Account, billing, or product support requests.
+  - name: Discussions
+    url: https://github.com/cryptflare/cryptflare-cli/discussions
+    about: Ask questions or share usage patterns with the community.
