@@ -33,7 +33,7 @@ jobs:
             echo "No package.json - mirror is in pre-sync state, skipping CI"
           fi
       - if: steps.check.outputs.has_source == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -65,7 +65,7 @@ jobs:
             echo "No package.json - mirror is in pre-sync state, skipping tests"
           fi
       - if: steps.check.outputs.has_source == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
           cache: npm
