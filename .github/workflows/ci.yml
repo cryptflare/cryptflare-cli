@@ -12,19 +12,37 @@ concurrency:
 permissions:
   contents: read
 
+# Mirror CI tolerates the pre-sync (seed-only) state. The first commit
+# on each mirror is the skeleton with no package.json; the sync workflow
+# in the upstream monorepo writes the real source on tag. The "Check for
+# source" step short-circuits subsequent steps until that lands.
+
 jobs:
   lint-typecheck:
     name: Lint + typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - id: check
+        name: Check for source
+        run: |
+          if [ -f package.json ]; then
+            echo "has_source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_source=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json - mirror is in pre-sync state, skipping CI"
+          fi
+      - if: steps.check.outputs.has_source == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
+      - if: steps.check.outputs.has_source == 'true'
+        run: npm ci
+      - if: steps.check.outputs.has_source == 'true'
+        run: npm run typecheck
+      - if: steps.check.outputs.has_source == 'true'
+        run: npm run build
 
   test:
     name: Test (${{ matrix.os }} / Node ${{ matrix.node }})
@@ -36,9 +54,22 @@ jobs:
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - id: check
+        name: Check for source
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "has_source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_source=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json - mirror is in pre-sync state, skipping tests"
+          fi
+      - if: steps.check.outputs.has_source == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
-      - run: npm test
+      - if: steps.check.outputs.has_source == 'true'
+        run: npm ci
+      - if: steps.check.outputs.has_source == 'true'
+        run: npm test
