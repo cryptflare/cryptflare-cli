@@ -25,6 +25,17 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
+      # Node 22 ships npm 10.x. Trusted publishing needs npm >= 11.5.1.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Verify npm credentials
+        # Fails fast with a readable error instead of letting `npm publish`
+        # report `404 Not Found - PUT`, which looks like a missing package but
+        # actually means npm rejected the credentials (it answers 404 rather
+        # than 403 so the endpoint cannot be used to probe private packages).
+        run: npm whoami
+
       - name: Verify tag matches package.json
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -38,10 +49,8 @@ jobs:
       - run: npm run build
       - run: npm test --if-present
 
-      - name: Publish (provenance)
+      - name: Publish (provenance via trusted publishing)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
