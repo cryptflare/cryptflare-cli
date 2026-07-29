@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -89,15 +89,23 @@ describe('chunk', () => {
   });
 });
 
-describe('parity with the server schema', () => {
-  // These constants are duplicated because the CLI mirror vendors only BRAND
-  // from @cryptflare/shared. Duplication that drifts silently is worse than
-  // none, so read the server's source and assert they still agree.
-  // Resolved from this file, not process.cwd(): the working directory is the
-  // package under a filtered run but the repo root under `pnpm test:run`, and
-  // the relative path only worked for the former.
-  const SHARED = join(dirname(fileURLToPath(import.meta.url)), '../../../shared/src');
-  const schema = readFileSync(join(SHARED, 'schemas/secrets.ts'), 'utf-8');
+// These constants are duplicated because the CLI mirror vendors only BRAND
+// from @cryptflare/shared. Duplication that drifts silently is worse than
+// none, so read the server's source and assert they still agree.
+// Resolved from this file, not process.cwd(): the working directory is the
+// package under a filtered run but the repo root under `pnpm test:run`, and
+// the relative path only worked for the former.
+const SHARED = join(dirname(fileURLToPath(import.meta.url)), '../../../shared/src');
+
+// The mirror repo (cryptflare/cryptflare-cli) contains this package's src and
+// nothing else, so packages/shared is not on disk there and these reads throw
+// ENOENT. That failure took down `npm test` in the mirror's release workflow
+// and blocked the 0.5.0 publish. The check is a monorepo concern: skip it
+// where its subject does not exist, rather than fail a release over it.
+const hasSharedSource = existsSync(join(SHARED, 'schemas/secrets.ts'));
+
+describe.skipIf(!hasSharedSource)('parity with the server schema', () => {
+  const schema = hasSharedSource ? readFileSync(join(SHARED, 'schemas/secrets.ts'), 'utf-8') : '';
 
   it('matches the server key and value limits', () => {
     expect(schema).toContain(`max(${MAX_KEY_LENGTH})`);
