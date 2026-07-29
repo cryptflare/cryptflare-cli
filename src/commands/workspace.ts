@@ -3,6 +3,7 @@ import chalk from 'chalk';
 
 import { getClient } from '../lib/api.js';
 import { resolveOrg } from '../lib/resolve.js';
+import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
 
 type WorkspaceItem = { id: string; name: string; slug: string; created_at: string };
@@ -58,6 +59,7 @@ workspaceCommand
   .option('-y, --yes', 'Skip confirmation')
   .action(async (slug: string, opts) => {
     try {
+      await requirePermission('workspaces:delete');
       const org = resolveOrg(opts);
 
       if (!opts.yes) {

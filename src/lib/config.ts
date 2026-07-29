@@ -1,5 +1,14 @@
 import Conf from 'conf';
 
+type PermissionCacheEntry = {
+  /** First 12 chars of the bearer token; identifies which token the cache
+   * belongs to so a different login wipes the entry on access. */
+  tokenPrefix: string;
+  permissions: string[];
+  /** ISO 8601 stamp; refreshed from `auth.whoami` after PERMISSIONS_TTL_MS. */
+  fetchedAt: string;
+};
+
 type CfConfig = {
   token?: string;
   org?: string;
@@ -13,6 +22,9 @@ type CfConfig = {
    * Default: `undefined` (treated as off until the user opts in).
    */
   telemetry?: boolean;
+  /** Permissions cache. Keyed implicitly by tokenPrefix - if the bearer
+   * token changes, the entry is treated as a miss and refetched. */
+  permissions?: PermissionCacheEntry;
 };
 
 const config = new Conf<CfConfig>({
@@ -28,6 +40,14 @@ const config = new Conf<CfConfig>({
       },
     },
     telemetry: { type: 'boolean' },
+    permissions: {
+      type: 'object',
+      properties: {
+        tokenPrefix: { type: 'string' },
+        permissions: { type: 'array', items: { type: 'string' } },
+        fetchedAt: { type: 'string' },
+      },
+    },
   },
 });
 
@@ -52,6 +72,21 @@ export function setToken(token: string) {
 
 export function clearToken() {
   config.delete('token');
+  // A different identity should never inherit the previous user's
+  // cached permissions. Wipe alongside the bearer token.
+  config.delete('permissions');
+}
+
+export function getCachedPermissions(): PermissionCacheEntry | undefined {
+  return config.get('permissions');
+}
+
+export function setCachedPermissions(entry: PermissionCacheEntry) {
+  config.set('permissions', entry);
+}
+
+export function clearCachedPermissions() {
+  config.delete('permissions');
 }
 
 export function getOrg(): string | undefined {

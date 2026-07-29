@@ -1,10 +1,12 @@
 import { Command } from 'commander';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import chalk from 'chalk';
 import ora from 'ora';
 
 import { getClient } from '../lib/api.js';
 import { resolveContext } from '../lib/resolve.js';
+import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
 
 function parseEnvFile(content: string): Map<string, string> {
@@ -224,6 +226,145 @@ export const diffCommand = new Command('diff')
         console.log(chalk.dim(`  = ${common.length} in both (values not compared for security)`));
       }
       console.log();
+    } catch (err) {
+      output.handleError(err);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// `cf sync daemon` - long-running pull that watches a workspace + environment
+// and rewrites a local .env file whenever the remote set of secrets changes.
+//
+// Why polling, not push: the API does not yet expose an SSE / webhook stream
+// for arbitrary secret-set changes. Polling with bounded backoff keeps the
+// pressure off the API and is honest about latency. Plan tracks an SSE
+// upgrade as a follow-up; switching the loop body is the only change once
+// the server endpoint ships.
+// ---------------------------------------------------------------------------
+
+const DAEMON_BASE_POLL_MS = 30_000;
+const DAEMON_BACKOFF_CEILING_MS = 300_000;
+const DAEMON_BACKOFF_MULTIPLIER = 2;
+const DAEMON_NO_CHANGE_GRACE = 5; // polls before backoff kicks in
+const DAEMON_JITTER_PCT = 0.1;
+
+function jittered(ms: number, pct: number): number {
+  const delta = ms * pct * (Math.random() * 2 - 1);
+  return Math.max(1_000, Math.round(ms + delta));
+}
+
+function hashSecrets(secrets: Map<string, string>): string {
+  const h = createHash('sha256');
+  const keys = [...secrets.keys()].sort();
+  for (const k of keys) h.update(`${k}=${secrets.get(k) ?? ''} `);
+  return h.digest('hex');
+}
+
+async function pullSecretSet(
+  client: ReturnType<typeof getClient>,
+  scope: { organisation?: string; workspace: string; environment: string },
+): Promise<Map<string, string>> {
+  const set = new Map<string, string>();
+  const list = await client.secrets.list(scope);
+  for await (const secret of list) {
+    const data = await client.secrets.reveal({ ...scope, key: secret.key });
+    set.set(data.key, data.value);
+  }
+  return set;
+}
+
+function writeAtomic(path: string, body: string): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, body, { encoding: 'utf-8', mode: 0o600 });
+  renameSync(tmp, path);
+}
+
+export const daemonCommand = new Command('daemon')
+  .description('Run a polling sync loop that rewrites a local .env file on remote changes')
+  .option('-o, --org <id>', 'Organisation ID')
+  .option('-w, --workspace <slug>', 'Workspace slug')
+  .option('-e, --env <slug>', 'Environment slug')
+  .option('-f, --file <path>', 'Output file path', '.env')
+  .option('--interval <seconds>', 'Base poll interval in seconds (>=5)', String(DAEMON_BASE_POLL_MS / 1000))
+  .option('--once', 'Run a single sync pass and exit (CI-friendly)')
+  .option('-q, --quiet', 'Only log when the file changes')
+  .action(async (opts) => {
+    try {
+      await requirePermission('secrets:read');
+      const ctx = resolveContext(opts);
+      const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env };
+      const client = getClient();
+      const baseIntervalMs = Math.max(5_000, Number(opts.interval) * 1_000);
+      if (!Number.isFinite(baseIntervalMs)) {
+        output.handleError(new Error(`Invalid --interval; expected a number, got ${opts.interval}`));
+        return;
+      }
+
+      // Signal handling: SIGTERM / SIGINT flips a stop flag and the loop
+      // exits cleanly on the next iteration boundary so we never leave a
+      // half-written file or a phantom HTTPS connection open.
+      let stop = false;
+      const onSignal = (sig: NodeJS.Signals) => {
+        if (stop) return;
+        stop = true;
+        console.error(chalk.dim(`\n[daemon] received ${sig}, stopping after current pass...`));
+      };
+      process.on('SIGTERM', onSignal);
+      process.on('SIGINT', onSignal);
+
+      console.error(chalk.bold(`[daemon] syncing ${ctx.workspace}/${ctx.env} -> ${opts.file} every ${baseIntervalMs / 1000}s`));
+
+      let lastHash: string | null = null;
+      let consecutiveNoChange = 0;
+      let backoffMs = baseIntervalMs;
+
+      while (!stop) {
+        const startedAt = Date.now();
+        try {
+          const secrets = await pullSecretSet(client, scope);
+          const nextHash = hashSecrets(secrets);
+
+          if (nextHash !== lastHash) {
+            const body = formatEnvFile(secrets);
+            writeAtomic(opts.file, body);
+            const action = lastHash === null ? 'wrote' : 'updated';
+            console.error(chalk.green(`[daemon] ${action} ${opts.file} (${secrets.size} secrets)`));
+            lastHash = nextHash;
+            consecutiveNoChange = 0;
+            backoffMs = baseIntervalMs;
+          } else {
+            consecutiveNoChange++;
+            if (consecutiveNoChange >= DAEMON_NO_CHANGE_GRACE) {
+              backoffMs = Math.min(backoffMs * DAEMON_BACKOFF_MULTIPLIER, DAEMON_BACKOFF_CEILING_MS);
+            }
+            if (!opts.quiet) {
+              console.error(chalk.dim(`[daemon] no change (${secrets.size} secrets, next poll ${Math.round(backoffMs / 1000)}s)`));
+            }
+          }
+        } catch (err) {
+          // Reset backoff on transient API errors so we don't compound a
+          // bad-network minute into a 5-minute lull. Keep going - the
+          // daemon's job is to survive blips.
+          consecutiveNoChange = 0;
+          backoffMs = baseIntervalMs;
+          console.error(chalk.red(`[daemon] pull failed: ${(err as Error).message ?? err}`));
+        }
+
+        if (opts.once || stop) break;
+
+        const sleepMs = jittered(backoffMs, DAEMON_JITTER_PCT);
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, sleepMs);
+          // Wake immediately when a stop signal lands mid-sleep so SIGTERM
+          // does not block for `backoffMs` before exiting.
+          const onWake = () => { clearTimeout(t); resolve(); };
+          process.once('SIGTERM', onWake);
+          process.once('SIGINT', onWake);
+        });
+        void startedAt;
+      }
+
+      console.error(chalk.dim('[daemon] stopped'));
     } catch (err) {
       output.handleError(err);
     }

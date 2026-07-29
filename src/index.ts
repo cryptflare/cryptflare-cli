@@ -10,10 +10,12 @@ import { orgCommand } from './commands/org.js';
 import { workspaceCommand } from './commands/workspace.js';
 import { environmentCommand } from './commands/environment.js';
 import { tokenCommand } from './commands/token.js';
+import { auditCommand } from './commands/audit.js';
 import { configCommand } from './commands/config.js';
 import { whoamiCommand } from './commands/whoami.js';
 import { statusCommand } from './commands/status.js';
-import { pullCommand, pushCommand, diffCommand } from './commands/sync.js';
+import { pullCommand, pushCommand, diffCommand, daemonCommand } from './commands/sync.js';
+import { syncCommand } from './commands/sync-service.js';
 import { telemetryCommand } from './commands/telemetry.js';
 import { updateCommand } from './commands/update.js';
 import { initCommand } from './commands/init.js';
@@ -34,10 +36,14 @@ program.addCommand(whoamiCommand);
 program.addCommand(secretCommand);
 program.addCommand(podCommand);
 
-// Sync (Terraform-like)
+// Sync (Terraform-like, one-shot single-file)
 program.addCommand(pullCommand);
 program.addCommand(pushCommand);
 program.addCommand(diffCommand);
+program.addCommand(daemonCommand);
+
+// Sync service (multi-project, stateful, bidirectional)
+program.addCommand(syncCommand);
 
 // Import from external sources
 program.addCommand(importCommand);
@@ -51,6 +57,7 @@ program.addCommand(orgCommand);
 program.addCommand(workspaceCommand);
 program.addCommand(environmentCommand);
 program.addCommand(tokenCommand);
+program.addCommand(auditCommand);
 
 // Status & config
 program.addCommand(statusCommand);

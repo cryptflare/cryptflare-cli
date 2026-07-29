@@ -1,5 +1,95 @@
 # @cryptflare/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- 02994f4: Add `cf sync`: a multi-project, bidirectional env-file sync service.
+
+  Registers project directories in `~/.config/cryptflare/sync.json`, binding each
+  `.env`-shaped file to one environment, and keeps them reconciled against
+  CryptFlare in both directions. Ships `cf sync install-service` to generate a
+  systemd user unit for unattended operation.
+  - Three-way merge against a recorded baseline, so local edits push up and
+    remote rotations pull down without guessing direction. Remote change
+    detection reads the version from `secrets.list`, so values are only decrypted
+    for keys that actually changed.
+  - Guarded push: keys already present remotely are updated; keys new to a local
+    file are reported, never auto-created. Deletion is never propagated either
+    way.
+  - Conflicts resolve remote-wins with the local value preserved in a
+    `.cf-conflict-<timestamp>` sidecar.
+  - Writes preserve comments, ordering, `export` prefixes, and any line the CLI
+    does not manage. Multi-line quoted values are detected and left alone.
+
+  Subcommands: `add`, `list`, `remove`, `enable`, `disable`, `status`, `run`,
+  `watch`, `install-service`. The existing `cf pull` / `cf push` / `cf diff` /
+  `cf daemon` commands are unchanged.
+
+## 0.3.0
+
+### Minor Changes
+
+- 8fb25cf: Expose access-token IP allowlist on the TypeScript SDK and CLI.
+  - `tokens.create` and `tokens.update` accept an optional `ipAllowlist?: string[]` (max 50 entries; IPv4 / IPv6 addresses or CIDR blocks). Requests from outside the list are rejected with `403 ACCESS_TOKEN_IP_BLOCKED`.
+  - `tokens.update` accepts `ipAllowlist: null` to clear an existing allowlist; omitting the field leaves it unchanged.
+  - New CLI flag `cf token create --ip-allow=10.0.0.0/8,203.0.113.5,...` (comma-separated). `cf token list` shows the allowlist size per token.
+
+  Mirrors the long-standing service-token allowlist behaviour for personal access tokens.
+
+- cfe749b: `audit.export(...)` SDK method + `cf audit export` CLI command.
+
+  ```ts
+  const stream = await client.audit.export({
+    startDate: "2026-04-01T00:00:00Z",
+    endDate: "2026-04-30T23:59:59Z",
+  });
+  // stream is a ReadableStream<Uint8Array> of JSON Lines.
+  ```
+
+  ```bash
+  cf audit export --start 2026-04-01T00:00:00Z --end 2026-04-30T23:59:59Z --file audit-april.jsonl
+  ```
+
+  Streams the API's `POST /v1/organisations/:org/audit/export` JSON Lines response directly to disk (or stdout when `--file -`). No buffering, so memory stays flat for arbitrarily large exports up to the server's 100 000-row + 366-day caps. Throttled server-side to one request per hour per organisation.
+
+  Closes the audit-export loop end to end (API endpoint shipped previously).
+
+- 718b5cf: Client-side permission gate for destructive commands.
+
+  `cf secret rotate`, `cf secret delete`, `cf secret rollback`, `cf token create`, `cf token revoke`, and `cf workspace delete` now check the bearer token's scopes via `auth.whoami` before issuing the destructive API request. A missing scope prints `Insufficient permission. Need: X. Have: Y.` and exits non-zero before any state changes.
+
+  Permissions are cached for 5 minutes per (token, server) pair under the existing `conf` config so commands don't hammer `/v1/auth/whoami`. `cf logout` clears the cache alongside the bearer token.
+
+  The server is still the source of truth; this is defensive UX so a misconfigured token fails fast instead of after a destructive request has already partially landed.
+
+- 6621c52: Expose secret version history on `cf secret`.
+  - `cf secret versions <key>` lists every historical version (metadata only).
+  - `cf secret reveal-version <key> <version>` decrypts a specific past version.
+  - `cf secret rollback <key> <version>` creates a new version with the value from the chosen historical version. Requires `--yes` to confirm.
+
+  The backend endpoints + TypeScript SDK methods already shipped; this commit wires them through the CLI so version history is available without the dashboard.
+
+- 3367583: `cf sync daemon` - long-running polling loop that keeps a local `.env` file in lockstep with a remote workspace/environment.
+
+  ```
+  cf sync daemon --workspace prod --env production --file .env
+  ```
+
+  - Pulls every secret in the scope, writes them to the target file atomically (`.env.tmp` -> rename), and rewatches.
+  - Default poll interval 30s. Five consecutive no-change polls double the interval up to a 5-minute ceiling so an idle scope does not hammer the API; a change resets the interval. ±10 % jitter avoids a thundering herd across multiple daemons.
+  - SIGTERM / SIGINT triggers a clean shutdown after the in-flight pull completes; the file is never half-written.
+  - `--once` runs a single pass (useful in CI).
+  - `requires secrets:read` (gated by the new client-side RBAC helper before the first pull).
+
+  SSE-driven streaming is tracked as a server-side follow-up; switching from poll to push is a one-line change in the daemon loop once `/v1/secrets/stream` ships.
+
+### Patch Changes
+
+- Updated dependencies [8fb25cf]
+- Updated dependencies [cfe749b]
+  - @cryptflare/sdk@0.4.0
+
 ## 0.2.1
 
 ### Patch Changes
