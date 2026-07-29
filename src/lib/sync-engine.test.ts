@@ -124,6 +124,43 @@ describe('planBinding', () => {
     expect(typesOf((await planBinding(client, project, binding, state)).actions)).toEqual(['conflict:A']);
   });
 
+  it('decrypts nothing when planning with reveal disabled', async () => {
+    // `cf sync status` is a dry run. Reveal is limited to 30/min per
+    // credential, and first-contact adoption across a dozen freshly
+    // registered files exhausted it, so status failed instead of reporting.
+    const { client, calls } = fakeClient(new Map([
+      ['A', { value: '1', version: 1 }],
+      ['B', { value: '2', version: 1 }],
+    ]));
+    writeEnv('A=1\nB=2\n');
+
+    const plan = await planBinding(client, project, binding, state, { reveal: false });
+
+    expect(calls.reveals).toEqual([]);
+    expect(typesOf(plan.actions)).toEqual(['needs-compare:A', 'needs-compare:B']);
+  });
+
+  it('still compares by default, so `cf sync run` is unchanged', async () => {
+    const { client, calls } = fakeClient(new Map([['A', { value: '1', version: 1 }]]));
+    writeEnv('A=1\n');
+
+    const plan = await planBinding(client, project, binding, state);
+
+    expect(calls.reveals).toEqual(['A']);
+    expect(plan.actions).toEqual([]);
+  });
+
+  it('refuses to apply a plan whose keys were never compared', async () => {
+    // Applying it would rebaseline unverified keys as if they agreed, hiding
+    // a real divergence for good.
+    const { client } = fakeClient(new Map([['A', { value: 'remote', version: 1 }]]));
+    writeEnv('A=local\n');
+
+    const plan = await planBinding(client, project, binding, state, { reveal: false });
+
+    await expect(applyPlan(client, plan, state)).rejects.toThrow(/never compared/);
+  });
+
   it('never auto-creates a key that is new to the local file', async () => {
     const { client } = fakeClient(new Map([['A', { value: '1', version: 1 }]]));
     writeEnv('A=1\nSCRATCH=nope\n');

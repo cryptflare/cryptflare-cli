@@ -1,5 +1,18 @@
 # @cryptflare/cli
 
+## 0.5.1
+
+### Patch Changes
+
+- 2423622: Stop `cf sync status` from spending the reveal rate limit.
+
+  Planning decrypts a value only on first contact with a key that exists both locally and remotely, where nothing else can distinguish "already in sync" from "diverged". Across a dozen newly registered files that exhausted the 30/min reveal limit, and the dry run failed with "Too many requests to reveal-secret" instead of reporting anything. `status` now plans without decrypting and reports those keys as `needs-compare`; `cf sync run` resolves them. Applying a plan built that way is refused rather than rebaselining keys that were never compared.
+
+  Also fixes `cf sync status` printing `undefined/<environment>` for any binding that names its own workspace, and adds `cf config path`, which prints where the config, sync registry, and sync state actually live (under `~/.config/cryptflare-nodejs`, since `conf` appends the suffix - the docs claimed `~/.config/cryptflare`).
+
+- Updated dependencies [2423622]
+  - @cryptflare/sdk@1.0.1
+
 ## 0.5.0
 
 ### Minor Changes

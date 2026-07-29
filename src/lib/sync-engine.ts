@@ -53,7 +53,14 @@ export type SyncAction =
   /** Key removed remotely but still local. Never auto-deletes the line. */
   | { type: 'skip-remote-deleted'; key: string }
   /** Multi-line quoted value the writer will not risk rewriting. */
-  | { type: 'skip-multiline'; key: string };
+  | { type: 'skip-multiline'; key: string }
+  /**
+   * First contact on a key that exists on both sides, reported by a planner
+   * that was told not to decrypt. Deciding between "already in sync" and
+   * "genuinely diverged" needs the remote value, so the answer is deferred to
+   * the next real pass rather than bought with a reveal during a dry run.
+   */
+  | { type: 'needs-compare'; key: string; remoteVersion: number };
 
 export type BindingPlan = {
   key: string;
@@ -113,16 +120,25 @@ export function countActionable(plan: BindingPlan): number {
 /**
  * Decides what should happen for one binding without touching anything.
  *
- * Costs exactly one `secrets.list` call - remote change detection reads the
- * `version` field the list endpoint already returns, so no value is decrypted
- * until {@link applyPlan} knows which keys actually need pulling.
+ * Change detection reads the `version` field `secrets.list` already returns,
+ * so steady-state planning costs one request and decrypts nothing. The one
+ * exception is first contact - a key on both sides with no merge base, where
+ * only the values can distinguish "already in sync" from "diverged".
+ *
+ * `reveal: false` suppresses even that, reporting `needs-compare` instead.
+ * Reveal is rate limited to 30/min per credential, and a dry run across a
+ * dozen freshly registered files exhausted it in one pass - `cf sync status`
+ * failed with "Too many requests to reveal-secret" and planned nothing.
+ * A read-only command must not spend a budget the real pass needs.
  */
 export async function planBinding(
   client: CryptFlare,
   project: SyncProject,
   binding: SyncBinding,
   state: SyncState,
+  opts: { reveal?: boolean } = {},
 ): Promise<BindingPlan> {
+  const reveal = opts.reveal ?? true;
   const filePath = bindingFilePath(project, binding);
   const key = bindingKey(project, binding);
   const scope = scopeFor(project, binding);
@@ -162,6 +178,10 @@ export async function planBinding(
         // once - equal means adopt silently (the overwhelmingly common case
         // when registering a project whose .env was already pushed), unequal
         // means a genuine unknowable divergence that the caller must see.
+        if (!reveal) {
+          actions.push({ type: 'needs-compare', key: secretKey, remoteVersion });
+          continue;
+        }
         const value = (await client.secrets.reveal({ ...scope, key: secretKey })).value;
         revealed.set(secretKey, value);
         if (value !== localValue) actions.push({ type: 'conflict', key: secretKey, remoteVersion });
@@ -205,6 +225,20 @@ export async function applyPlan(
   opts: { push: boolean } = { push: true },
 ): Promise<ApplyResult> {
   const scope = scopeFor(plan.project, plan.binding);
+
+  // A `needs-compare` plan came from a planner that was told not to decrypt,
+  // so it does not know whether those keys agree. Applying it would rebaseline
+  // them as if they did, permanently hiding a real divergence. Refuse rather
+  // than record a merge base that was never verified.
+  const unresolved = plan.actions.filter((a) => a.type === 'needs-compare');
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Cannot apply a plan built without reveal: ${unresolved.length} key(s) were never compared `
+        + `(${unresolved.slice(0, 3).map((a) => a.key).join(', ')}${unresolved.length > 3 ? ', ...' : ''}). `
+        + 'Re-plan with reveal enabled.',
+    );
+  }
+
   const pulls = plan.actions.filter((a): a is Extract<SyncAction, { type: 'pull' }> => a.type === 'pull');
   const conflicts = plan.actions.filter((a): a is Extract<SyncAction, { type: 'conflict' }> => a.type === 'conflict');
   const pushes = opts.push ? plan.actions.filter((a) => a.type === 'push') : [];

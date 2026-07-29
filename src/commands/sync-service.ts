@@ -414,6 +414,7 @@ const ACTION_STYLE: Record<string, (s: string) => string> = {
   'skip-local-deleted': chalk.dim,
   'skip-remote-deleted': chalk.dim,
   'skip-multiline': chalk.yellow,
+  'needs-compare': chalk.cyan,
 };
 
 const ACTION_GLYPH: Record<string, string> = {
@@ -424,6 +425,7 @@ const ACTION_GLYPH: Record<string, string> = {
   'skip-local-deleted': '..',
   'skip-remote-deleted': '..',
   'skip-multiline': '..',
+  'needs-compare': '??',
 };
 
 function describeAction(type: string): string {
@@ -436,6 +438,8 @@ function describeAction(type: string): string {
       return 'removed remotely, still local - not deleted';
     case 'skip-multiline':
       return 'multi-line value, not managed';
+    case 'needs-compare':
+      return 'first sync for this key - `cf sync run` compares it (a dry run will not decrypt)';
     default:
       return '';
   }
@@ -443,21 +447,39 @@ function describeAction(type: string): string {
 
 function printPlan(plan: BindingPlan, verbose: boolean): void {
   const label = `${plan.project.id}/${plan.binding.file}`;
-  const scope = `${plan.project.workspace}/${plan.binding.environment}`;
+  // A binding may name its own workspace, which overrides the project default
+  // and is the whole point in a monorepo mapping each app to its own. Reading
+  // only the project field printed "undefined/dev" for those.
+  const scope = `${plan.binding.workspace ?? plan.project.workspace}/${plan.binding.environment}`;
   const actionable = countActionable(plan);
+  // Not actionable - nothing to do about them - but a dry run that stays
+  // silent about keys it declined to compare is misreporting.
+  const unresolved = plan.actions.filter((a) => a.type === 'needs-compare').length;
 
-  if (actionable === 0 && !verbose) return;
+  if (actionable === 0 && unresolved === 0 && !verbose) return;
 
   console.log(
     `${chalk.bold(label)} ${chalk.dim(`<-> ${scope}`)}${plan.creating ? chalk.yellow(' (file will be created)') : ''}`,
   );
   for (const action of plan.actions) {
     if (!verbose && action.type.startsWith('skip-')) continue;
+    // First contact usually means every key at once - a fresh registration
+    // has no baseline for any of them. One line each, carrying the same
+    // sentence, buries the pulls and conflicts that need a decision. Collapse
+    // to a count below, and list them under --verbose.
+    if (!verbose && action.type === 'needs-compare') continue;
     const style = ACTION_STYLE[action.type] ?? chalk.white;
     const note = describeAction(action.type);
     console.log(`    ${style(`${ACTION_GLYPH[action.type]} ${action.key}`)}${note ? chalk.dim(`  ${note}`) : ''}`);
   }
-  if (actionable === 0) console.log(chalk.dim('    in sync'));
+
+  if (unresolved > 0 && !verbose) {
+    console.log(
+      `    ${chalk.cyan(`?? ${unresolved} key(s) awaiting first comparison`)}`
+        + chalk.dim(` - ${chalk.cyan('cf sync run')} resolves them (a dry run will not decrypt)`),
+    );
+  }
+  if (actionable === 0 && unresolved === 0) console.log(chalk.dim('    in sync'));
 }
 
 type PassOptions = {
@@ -486,7 +508,9 @@ async function runPass(opts: PassOptions): Promise<PassSummary> {
     for (const binding of project.bindings) {
       const label = `${project.id}/${binding.file}`;
       try {
-        const plan = await planBinding(client, project, binding, state);
+        // A dry run reports; it must not consume the reveal budget the real
+        // pass needs, so first-contact keys come back as `needs-compare`.
+        const plan = await planBinding(client, project, binding, state, { reveal: !opts.dryRun });
 
         if (opts.dryRun) {
           printPlan(plan, opts.verbose);

@@ -1,7 +1,7 @@
 /**
  * `.cryptflare.json` - the committed, per-repository sync manifest.
  *
- * The sync registry (`~/.config/cryptflare/sync.json`) is machine-local, so the
+ * The sync registry (`~/.config/cryptflare-nodejs/sync.json`) is machine-local, so the
  * knowledge of which file maps to which workspace lived only on the machine
  * where it was set up. A fresh clone - a new laptop, or a new teammate - had no
  * way to discover it, and setting up a six-app monorepo meant thirteen commands

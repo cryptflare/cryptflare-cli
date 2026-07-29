@@ -2,6 +2,8 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { getAllConfig, setDefault, deleteKey, getConfigPath } from '../lib/config.js';
 import * as output from '../lib/output.js';
+import { getRegistryPath } from '../lib/sync-registry.js';
+import { getStatePath } from '../lib/sync-state.js';
 
 export const configCommand = new Command('config')
   .description('Manage CLI configuration');
@@ -17,6 +19,27 @@ configCommand
     console.log(chalk.dim(`Config file: ${getConfigPath()}`));
     console.log();
     console.log(JSON.stringify(config, null, 2));
+  });
+
+configCommand
+  .command('path')
+  .description('Print where the CLI keeps its config, sync registry, and sync state')
+  .option('--json', 'Output as JSON')
+  .action((opts) => {
+    // These live under `~/.config/cryptflare-nodejs` - the `-nodejs` is
+    // env-paths' default suffix, not a typo, and it is unguessable enough
+    // that people went looking in `~/.config/cryptflare` and found nothing.
+    // Backing the files up or hand-editing them starts with locating them.
+    const paths = {
+      config: getConfigPath(),
+      registry: getRegistryPath(),
+      state: getStatePath(),
+    };
+    if (opts.json) return output.json(paths);
+
+    console.log(`  ${chalk.dim('config')}    ${paths.config}`);
+    console.log(`  ${chalk.dim('registry')}  ${paths.registry}`);
+    console.log(`  ${chalk.dim('state')}     ${paths.state}`);
   });
 
 configCommand
