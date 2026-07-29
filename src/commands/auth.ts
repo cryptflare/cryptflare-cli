@@ -5,7 +5,7 @@ import open from 'open';
 
 import { BRAND } from '../_vendored/brand';
 
-import { getClient, ApiError } from '../lib/api.js';
+import { getAnonymousClient, getClient, resetClient, ApiError } from '../lib/api.js';
 import { getToken, setToken, clearToken, setOrg, getConfigPath } from '../lib/config.js';
 import { success, warn, handleError } from '../lib/output.js';
 
@@ -53,7 +53,10 @@ authCommand
       return;
     }
 
-    const client = getClient();
+    // Anonymous on purpose. The device flow is how a token is obtained, so it
+    // must not require one - `getClient()` throws when the config is empty,
+    // which made `cf auth login` impossible right after `cf auth logout`.
+    const client = getAnonymousClient();
     const spinner = ora({ text: 'Requesting device code...', indent: 2 }).start();
 
     try {
@@ -102,6 +105,9 @@ authCommand
 
           setToken(result.apiKey);
           setOrg(result.org);
+          // Drop any cached client so a subsequent getClient() in this process
+          // picks up the token that was just saved rather than a stale one.
+          resetClient();
 
           spinner.stop();
 

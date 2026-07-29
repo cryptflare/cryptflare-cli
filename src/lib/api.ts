@@ -30,6 +30,28 @@ export function getClient(token?: string): CryptFlare {
   return cached;
 }
 
+/**
+ * Client for endpoints that take no credentials - specifically the device
+ * authorization flow (`POST /v1/cli/device`, `POST /v1/cli/token`), which is
+ * how a user obtains a token in the first place.
+ *
+ * `getClient()` cannot be used there: it throws `ConfigurationError` when no
+ * token is stored, so `cf auth login` was impossible immediately after
+ * `cf auth logout` - the one moment it is guaranteed to be needed.
+ *
+ * Deliberately not cached. Caching it would mean a later `getClient()` call in
+ * the same process silently reuses a credential-less client.
+ */
+export function getAnonymousClient(): CryptFlare {
+  return new CryptFlare({
+    // The SDK requires a non-empty apiKey. These routes ignore the
+    // Authorization header entirely, so the value is never meaningful.
+    apiKey: 'unauthenticated',
+    baseUrl: BASE_URL,
+    userAgentSuffix: 'cli',
+  });
+}
+
 /** Test seam - swap the cached client between calls. */
 export function resetClient(): void {
   cached = null;

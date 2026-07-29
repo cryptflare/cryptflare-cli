@@ -1,5 +1,24 @@
 # @cryptflare/cli
 
+## 0.4.1
+
+### Patch Changes
+
+- 0fd1499: Fix `cf auth login` failing with an unhandled `ConfigurationError` when no token
+  is stored.
+
+  Login built its API client with `getClient()`, which throws when the config
+  holds no token. That made authentication impossible in exactly the two states it
+  exists to resolve: immediately after `cf auth logout`, and on a fresh machine.
+  The throw also sat outside the command's try/catch, so it surfaced as a raw Node
+  stack trace rather than a readable message.
+
+  The device-authorization flow takes no credentials by design - `POST
+/v1/cli/device` and `POST /v1/cli/token` ignore the Authorization header - so
+  login now uses a new `getAnonymousClient()` that needs no stored token. It is
+  deliberately uncached, so it cannot leak into later authenticated calls, and the
+  client cache is reset once the new token is saved.
+
 ## 0.4.0
 
 ### Minor Changes
