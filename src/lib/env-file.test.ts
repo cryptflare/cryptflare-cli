@@ -111,6 +111,55 @@ describe('applyEnvChanges', () => {
     expect(toValueMap(parseEnvContent(rendered))).toEqual(tricky);
   });
 
+  it('manages a direnv .envrc without disturbing its directives', () => {
+    // .envrc is a shell script, not a dotenv. Only assignment lines may be
+    // rewritten; everything else - directives, comments, conditionals - has to
+    // survive byte for byte or direnv breaks.
+    const envrc = [
+      '# Local-only direnv config. Gitignored.',
+      'use flake',
+      'dotenv_if_exists .env.local',
+      '',
+      'export CLOUDFLARE_API_TOKEN=old-token',
+      'export CLOUDFLARE_ACCOUNT_ID=acct-123',
+      '',
+      'PATH_add ./bin',
+      'if [ -f .env.extra ]; then',
+      '  source_env .env.extra',
+      'fi',
+      '',
+    ].join('\n');
+
+    const { content } = applyEnvChanges(envrc, new Map([['CLOUDFLARE_API_TOKEN', 'new-token']]));
+
+    expect(content).toContain('export CLOUDFLARE_API_TOKEN=new-token');
+    expect(content).toContain('export CLOUDFLARE_ACCOUNT_ID=acct-123');
+    // Every non-assignment line untouched.
+    for (const line of ['use flake', 'dotenv_if_exists .env.local', 'PATH_add ./bin', 'source_env .env.extra', 'fi']) {
+      expect(content).toContain(line);
+    }
+    expect(content.split('\n')).toHaveLength(envrc.split('\n').length);
+  });
+
+  it('reads assignments out of an .envrc regardless of the shell around them', () => {
+    const parsed = parseEnvContent(['use flake', 'export A=1', 'PATH_add ./bin', 'export B=2'].join('\n'));
+    expect(toValueMap(parsed)).toEqual(new Map([['A', '1'], ['B', '2']]));
+  });
+
+  it('does not treat a shell directive as an assignment', () => {
+    // `source_env .env.extra` has no `=`; `PATH_add ./bin` neither. A parser
+    // that split naively would invent keys from these.
+    const parsed = parseEnvContent(['use flake', 'source_env .env.extra', 'PATH_add ./bin'].join('\n'));
+    expect(parsed.entries.size).toBe(0);
+  });
+
+  it('handles Workers .vars files, which are plain KEY=value', () => {
+    const vars = ['SESSION_SECRET=abc', 'STRIPE_SECRET_KEY=sk_test_123'].join('\n');
+    const { content } = applyEnvChanges(vars, new Map([['STRIPE_SECRET_KEY', 'sk_live_456']]));
+    expect(content).toContain('SESSION_SECRET=abc');
+    expect(content).toContain('STRIPE_SECRET_KEY=sk_live_456');
+  });
+
   it('preserves the absence of a trailing newline', () => {
     expect(applyEnvChanges('A=1', new Map([['A', '2']])).content).toBe('A=2');
     expect(applyEnvChanges('A=1\n', new Map([['A', '2']])).content).toBe('A=2\n');

@@ -1,5 +1,256 @@
 # @cryptflare/cli
 
+## 0.5.0
+
+### Minor Changes
+
+- 2063de1: `cf push` now validates the whole file before writing anything, and writes in
+  batches instead of one request per key.
+
+  Previously each key was sent individually with no rollback and no summary. A
+  rejection partway through left the environment half-written and reported only
+  the failing field - not which keys had already landed. That is how a
+  `STAFF_ADMIN_EMAILS` ended up orphaned in the wrong environment after an
+  interrupted push.
+
+  Now:
+  - **Validated up front.** Keys and values are checked against the same rules the
+    server enforces, and every problem is reported at once rather than one per
+    round trip. Nothing is written if anything is invalid.
+  - **Batched writes.** A 23-key push is one request instead of 23, using the
+    batch endpoints, each of which is a single multi-row insert server-side.
+  - **Honest failure.** If a batch does fail, the output names the keys that
+    landed and notes that re-running is safe.
+  - **`--dry-run` validates too**, so a preview no longer passes on a file the
+    real push would reject.
+
+- a55fd37: Stop requiring secret values on the command line.
+
+  `cf secret set KEY VALUE` took the value as a positional argument and
+  `cf secret rotate KEY --value VALUE` required a flag. Both write the secret into
+  shell history (`~/.bash_history`, `~/.zsh_history`), expose it in `ps` output to
+  any other user on the machine while the command runs, and leave it in terminal
+  scrollback and CI logs.
+
+  There are now three safer routes, matching what other secrets tooling does
+  (`gh secret set` reads stdin, `wrangler secret put` prompts, `vault kv put`
+  accepts `@file`):
+
+  ```bash
+  cf secret set API_KEY                          # prompts, hidden input
+  echo -n "$API_KEY" | cf secret set API_KEY     # stdin
+  cf secret set API_KEY --file ./key.txt         # file
+  cf secret set API_KEY @./key.txt               # file, shorthand
+
+  openssl rand -hex 32 | cf secret rotate API_KEY
+  ```
+
+  The inline forms still work so existing scripts keep running, but they now warn
+  on stderr - never stdout, so `--json` output and pipelines stay clean.
+
+  A single trailing newline is stripped from file and stdin input, since
+  `echo "$V" |` adds one and a secret rarely wants it. Interior newlines are
+  preserved, so a PEM key survives intact.
+
+- 6d4edc2: Fix `cf run`, which had never worked, and make `cf env -f shell` safe to eval.
+
+  **`cf run` was completely broken in every published version.** It declared no
+  positional argument, so commander rejected the command outright:
+
+  ```
+  $ cf run -w my-app -e production -- node server.js
+  error: too many arguments for 'run'. Expected 0 arguments but got 2.
+  ```
+
+  That is the headline example in the README. It now works, and three further
+  problems were fixed in the process:
+  - **Exit codes are propagated.** The child ran under `execSync`, which throws on
+    any non-zero exit; that became a CryptFlare-branded error and exit 1. So
+    `cf run -- npm test` reported 1 whether tests failed with 1 or 2, and buried
+    the reason. A signal death now becomes 128+signal, and a missing command
+    exits 127, as a shell would report them.
+  - **No shell.** The argv was reassembled with `join(' ')` and run through a
+    shell, so any argument containing a space, quote, `;` or `$(...)` was
+    reinterpreted. It now spawns with the argv vector intact.
+  - **Child flags reach the child.** `cf run -- vitest --watch` no longer has
+    `--watch` parsed by the CLI.
+
+  **`cf env -f shell` emitted double-quoted values**, leaving `$`, backticks and
+  `\` live. A secret containing `$(...)` executed when the output was eval'd -
+  the documented usage is `eval "$(cf env -f shell)"`. Values are now
+  single-quoted, with embedded quotes escaped.
+
+- 70885dd: Make `--slug` optional on `cf workspace create`, `cf environment create` and
+  `cf pod create`. It is derived from `--name` when omitted.
+
+  Creating anything meant typing the same string twice:
+
+  ```bash
+  cf workspace create -n peak-physique-api -s peak-physique-api
+  ```
+
+  Now:
+
+  ```bash
+  cf workspace create -n peak-physique-api          # slug: peak-physique-api
+  cf workspace create -n "Peak Physique API"        # slug: peak-physique-api
+  cf environment create -n Development -s dev       # explicit slug still wins
+  ```
+
+  Derivation folds accents to their base letter (`Café` becomes `cafe`, not
+  `caf`), collapses separator runs, and trims edges. An explicitly supplied slug
+  is validated locally, so a malformed one fails immediately with a suggested
+  correction instead of as a server validation error. A name that cannot be
+  slugged at all - punctuation only, or non-Latin script - asks for `--slug`
+  rather than sending something the server would reject.
+
+  `--slug` on the `update` commands is unchanged.
+
+- 45c39d2: Add `cf sync init` and the committed `.cryptflare.json` manifest, so a fresh
+  clone is one command.
+
+  The sync registry is machine-local, so the mapping of files to workspaces lived
+  only on the machine where it was set up. A new laptop - or a new teammate - had
+  no way to discover it, and a six-app monorepo meant thirteen commands plus six
+  remembered workspace slugs.
+
+  ```bash
+  git clone git@github.com:acme/my-monorepo.git
+  cd my-monorepo
+  cf sync init          # pulls every bound file, registers for ongoing sync
+  ```
+
+  `.cryptflare.json` is committed alongside the code and holds **no secrets** -
+  only file paths and workspace/environment/pod names. Generate it from an
+  existing setup with `cf sync init --write`.
+
+  Also in this release:
+  - **Per-binding `workspace`.** A binding may name its own workspace, so one
+    repository can map each app to its own - which matters because tokens are
+    scoped per workspace, keeping each app's secrets in a separate access
+    boundary. `cf sync add` accepts `--bind <file>=<workspace>/<environment>`.
+  - **Per-binding `pod`** for grouping within an environment.
+  - Existing files are merged rather than clobbered on `cf sync init`, so a
+    template `.env` shipped in the repo keeps its comments and unmanaged lines.
+  - `cf sync add` points you at `cf sync init` when the directory already has a
+    manifest, rather than letting the two drift apart.
+
+- c468066: Add `cf completion` and fix destructive commands reporting success when they did
+  nothing.
+
+  **Shell completions.** `cf completion bash|zsh|fish` emits a completion script,
+  generated by walking the live command tree so it cannot drift from the commands
+  that actually exist.
+
+  ```bash
+  source <(cf completion bash)                        # try it now
+  cf completion zsh > "${fpath[1]}/_cf"               # persist
+  cf completion fish > ~/.config/fish/completions/cf.fish
+  ```
+
+  **Confirmation.** Five destructive commands - `secret delete`, `secret
+rollback`, `workspace delete`, `pod delete`, `token revoke` - printed "Pass
+  --yes to confirm" and **exited 0**. So `cf secret delete X && echo done` printed
+  `done` having deleted nothing, and interactively you had to retype the whole
+  command with a flag.
+
+  They now prompt when there is a terminal, and exit 1 with an explanation when
+  there is not, so a script can tell refusal from success. `workspace delete`
+  requires typing the workspace slug, since it takes every environment, pod and
+  secret with it.
+
+- 227406d: Add `cf service-token` (alias `cf svc-token`).
+
+  Service tokens existed in the API and the dashboard but had no CLI surface, so
+  you could not mint the token your pipeline authenticates with from the tool your
+  pipeline uses.
+
+  ```bash
+  cf service-token list
+  cf service-token create -n ci-deploy -s secrets:read --expires 2027-01-01T00:00:00Z
+  cf service-token disable <id>     # reversible - pause a misbehaving pipeline
+  cf service-token enable <id>
+  cf service-token revoke <id>      # permanent, prompts first
+  ```
+
+  Distinct from `cf token`, which manages _personal_ access tokens scoped to one
+  workspace. A service token belongs to the organisation, is not tied to a person,
+  and can be disabled without being destroyed - which is what you want at 3am when
+  you would rather pause a pipeline than lose its audit trail.
+
+  `create` warns when no `--expires` is given, since an unexpiring token is one you
+  will never notice has leaked.
+
+- 3004f9b: `cf pull` no longer writes world-readable secrets, and merges instead of
+  refusing.
+
+  **File permissions.** Pulled files were written with the default mode, which on
+  a typical umask is `0644` - readable by every other user on the machine,
+  including on a shared CI runner. They are now `0600`, matching what the sync
+  service already did.
+
+  **Merging.** An existing file caused `cf pull` to refuse and point at
+  `--overwrite`, which regenerated the file from scratch and discarded comments,
+  ordering, and any key the CLI does not manage. The safe-looking path was the
+  destructive one.
+
+  It now merges by default - pulled keys updated in place, new ones appended,
+  everything else preserved - and reports what changed:
+
+  ```
+  ✓ Merged into .env: +1 new, ~1 updated, 0 unchanged
+  ```
+
+  `--overwrite` still regenerates wholesale when that is what you want.
+
+### Patch Changes
+
+- 7217aa4: Fix relative timestamps being wrong by the reader's UTC offset.
+
+  `cf secret list` reported a secret created seconds earlier as "10h ago" from
+  UTC+10, while a rotated one on the same line read "just now".
+
+  The API returns two shapes for the same instant. Rotate and update paths emit
+  ISO-8601 with an explicit zone (`2026-07-29T02:51:23.000Z`), but column
+  defaults use SQLite's `datetime('now')`, which yields `2026-07-29 02:51:23` -
+  no `T`, no zone designator. That is not a valid ISO-8601 date-time string, so
+  `new Date()` parses it as local time. The value is UTC, so every reader outside
+  UTC is wrong by exactly their own offset.
+
+  Timestamps are now parsed through a helper that treats the zone-less shape as
+  UTC. 67 columns in the schema carry that default, so this affects far more than
+  secret listings; normalising on read also corrects historical rows, which a
+  schema change could not.
+
+- fd8a2e1: Store the auth token in a private config file.
+
+  `~/.config/cryptflare*/config.json` holds the bearer token and was written with
+  `conf`'s default mode, which under a typical `0o022` umask lands at `0644` -
+  readable by every other user on the machine. A full-access credential should not
+  be.
+
+  It is now created `0600`, and an existing loose file is tightened the next time
+  any command runs, so the fix does not depend on re-authenticating. The repair is
+  best-effort and skipped on Windows, where `chmod` does not apply.
+
+- 7c20bdf: Fix `cf push`, `cf pull` and `cf diff` mangling `export KEY=value` lines.
+
+  Those commands carried their own `.env` parser that did not understand a leading
+  `export `, so a direnv `.envrc` line became the key `export CLOUDFLARE_API_TOKEN`
+  and the API rejected the push:
+
+  ```
+  Request validation failed - key: Key must be UPPER_SNAKE_CASE
+  ```
+
+  They now share the same structure-preserving parser as `cf sync`, so every
+  command agrees about the same file. This also brings quoted values, escapes,
+  inline comments and multi-line detection to the one-shot commands.
+
+- Updated dependencies [d154236]
+- Updated dependencies [023d039]
+  - @cryptflare/sdk@1.0.0
+
 ## 0.4.1
 
 ### Patch Changes

@@ -4,6 +4,9 @@ import { getClient } from '../lib/api.js';
 import { resolveContext } from '../lib/resolve.js';
 import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
+import { confirmDestructive } from '../lib/confirm.js';
+import { resolveSecretValue } from '../lib/secret-input.js';
+import { timeAgo } from '../lib/timestamps.js';
 
 export const secretCommand = new Command('secret')
   .description('Manage secrets');
@@ -47,22 +50,39 @@ secretCommand
   });
 
 secretCommand
-  .command('set <key> <value>')
-  .description('Create or update a secret')
+  // `<value>` is optional so the value need not appear on the command line,
+  // where it would be captured by shell history and visible in `ps`.
+  .command('set <key> [value]')
+  .description('Create or update a secret. Omit the value to be prompted, or pipe it on stdin.')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-e, --env <slug>', 'Environment ID or slug')
   .option('-o, --org <id>', 'Organisation ID')
   .option('-p, --pod <id>', 'Pod ID to place the secret in')
+  .option('--file <path>', 'Read the value from a file instead of the command line')
   .option('--json', 'Output as JSON')
-  .action(async (key: string, value: string, opts) => {
+  .addHelpText(
+    'after',
+    `
+Examples:
+  cf secret set API_KEY                      prompt for the value (hidden)
+  echo -n "$API_KEY" | cf secret set API_KEY read it from stdin
+  cf secret set API_KEY --file ./key.txt     read it from a file
+  cf secret set API_KEY @./key.txt           same, shorthand`,
+  )
+  .action(async (key: string, value: string | undefined, opts) => {
     try {
       const ctx = resolveContext(opts);
+      const secretValue = await resolveSecretValue({
+        inline: value,
+        file: opts.file,
+        promptLabel: `Value for ${key}`,
+      });
       const result = await getClient().secrets.create({
         organisation: ctx.org,
         workspace: ctx.workspace,
         environment: ctx.env,
         key,
-        value,
+        value: secretValue,
         ...(opts.pod !== undefined ? { podId: opts.pod } : {}),
       });
 
@@ -103,22 +123,38 @@ secretCommand
 
 secretCommand
   .command('rotate <key>')
-  .description('Rotate a secret to a new value')
-  .requiredOption('--value <value>', 'New secret value')
+  .description('Rotate a secret to a new value. Omit --value to be prompted, or pipe it on stdin.')
+  // No longer required: supplying it here writes the new secret into shell
+  // history, which is exactly what rotating a compromised secret is meant to
+  // get away from.
+  .option('--value <value>', 'New secret value (prefer stdin, --file, or the prompt)')
+  .option('--file <path>', 'Read the new value from a file')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-e, --env <slug>', 'Environment ID or slug')
   .option('-o, --org <id>', 'Organisation ID')
   .option('--json', 'Output as JSON')
+  .addHelpText(
+    'after',
+    `
+Examples:
+  cf secret rotate API_KEY                        prompt for the new value
+  openssl rand -hex 32 | cf secret rotate API_KEY generate and rotate in one step`,
+  )
   .action(async (key: string, opts) => {
     try {
       await requirePermission('secrets:write');
       const ctx = resolveContext(opts);
+      const value = await resolveSecretValue({
+        inline: opts.value,
+        file: opts.file,
+        promptLabel: `New value for ${key}`,
+      });
       const result = await getClient().secrets.rotate({
         organisation: ctx.org,
         workspace: ctx.workspace,
         environment: ctx.env,
         key,
-        value: opts.value,
+        value,
       });
 
       if (opts.json) return output.json(result);
@@ -140,11 +176,10 @@ secretCommand
       await requirePermission('secrets:delete');
       const ctx = resolveContext(opts);
 
-      if (!opts.yes) {
-        console.log(chalk.yellow(`This will permanently delete ${chalk.bold(key)} and all its version history.`));
-        console.log('Pass --yes to confirm.');
-        process.exit(0);
-      }
+      await confirmDestructive({
+        message: `This will permanently delete ${chalk.bold(key)} and all its version history.`,
+        assumeYes: opts.yes,
+      });
 
       await getClient().secrets.delete({
         organisation: ctx.org,
@@ -214,11 +249,12 @@ secretCommand
         return;
       }
 
-      if (!opts.yes) {
-        console.log(chalk.yellow(`This will create a new version of ${chalk.bold(key)} with the value from v${version}.`));
-        console.log('The current version is preserved in history. Pass --yes to confirm.');
-        process.exit(0);
-      }
+      await confirmDestructive({
+        message:
+          `This will create a new version of ${chalk.bold(key)} with the value from v${version}. ` +
+          'The current version is preserved in history.',
+        assumeYes: opts.yes,
+      });
 
       const result = await getClient().secrets.rollback({
         organisation: ctx.org,
@@ -298,13 +334,3 @@ secretCommand
     }
   });
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}

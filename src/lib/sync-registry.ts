@@ -16,12 +16,31 @@ import { dirname, join, resolve, isAbsolute } from 'node:path';
 
 import { getConfigPath } from './config.js';
 
-/** One `.env`-shaped file bound to one remote environment. */
+/** One `.env`-shaped file bound to one remote environment, optionally scoped to a pod. */
 export type SyncBinding = {
   /** Path to the env file, relative to the project root (e.g. `.env.local`). */
   file: string;
   /** Environment slug in the bound workspace. */
   environment: string;
+  /**
+   * Pod (secret folder) within the environment. Omitted means the root pod.
+   *
+   * Required for monorepos: several apps commonly define the same key with
+   * different values (`VITE_SENTRY_DSN`, `VITE_ENVIRONMENT`), so binding each
+   * app's file to the same environment root would have them silently overwrite
+   * one another. A pod per app keeps them separate without inventing an
+   * environment per app.
+   */
+  pod?: string;
+  /**
+   * Workspace slug for this binding, overriding the project's.
+   *
+   * A monorepo commonly maps one app per workspace - which is the layout that
+   * keeps each app's secrets in a separate access boundary, since tokens are
+   * scoped per workspace. Without this, every app in one repository would need
+   * its own registered project pointing at the same directory.
+   */
+  workspace?: string;
 };
 
 export type SyncProject = {
@@ -31,8 +50,12 @@ export type SyncProject = {
   path: string;
   /** Organisation ID. Falls back to the CLI default when omitted. */
   org?: string;
-  /** Workspace slug that owns every binding in this project. */
-  workspace: string;
+  /**
+   * Default workspace for bindings that do not name their own. Optional only
+   * when every binding carries a `workspace`; validation enforces that, so a
+   * binding can never end up with no workspace at all.
+   */
+  workspace?: string;
   /** `false` parks the project without deleting its config. */
   enabled: boolean;
   bindings: SyncBinding[];
@@ -79,7 +102,20 @@ function parseBinding(raw: unknown, path: string): SyncBinding {
     // is a needlessly large blast radius for a background service.
     throw new RegistryError(`${path}.file must be a relative path inside the project (got "${file}")`);
   }
-  return { file, environment: assertString(obj['environment'], `${path}.environment`) };
+  const pod = obj['pod'];
+  if (pod !== undefined && (typeof pod !== 'string' || pod.trim() === '')) {
+    throw new RegistryError(`${path}.pod must be a non-empty string when present`);
+  }
+  const workspace = obj['workspace'];
+  if (workspace !== undefined && (typeof workspace !== 'string' || workspace.trim() === '')) {
+    throw new RegistryError(`${path}.workspace must be a non-empty string when present`);
+  }
+  return {
+    file,
+    environment: assertString(obj['environment'], `${path}.environment`),
+    ...(typeof pod === 'string' ? { pod } : {}),
+    ...(typeof workspace === 'string' ? { workspace } : {}),
+  };
 }
 
 function parseProject(raw: unknown, path: string): SyncProject {
@@ -96,13 +132,33 @@ function parseProject(raw: unknown, path: string): SyncProject {
     throw new RegistryError(`${path}.org must be a string when present`);
   }
 
+  const bindings = bindingsRaw.map((b, i) => parseBinding(b, `${path}.bindings[${i}]`));
+
+  // The project-level workspace is a default, so it may be omitted - but only
+  // if every binding supplies its own. Checked here rather than at sync time so
+  // a registry that cannot resolve a workspace fails on load, naming the
+  // binding, instead of mid-pass against a live API.
+  const workspace = obj['workspace'];
+  if (workspace !== undefined && (typeof workspace !== 'string' || workspace.trim() === '')) {
+    throw new RegistryError(`${path}.workspace must be a non-empty string when present`);
+  }
+  if (workspace === undefined) {
+    const orphan = bindings.findIndex((b) => !b.workspace);
+    if (orphan !== -1) {
+      throw new RegistryError(
+        `${path}.bindings[${orphan}] has no workspace and ${path} sets no default. ` +
+          `Add a workspace to the binding, or a project-level "workspace".`,
+      );
+    }
+  }
+
   return {
     id: assertString(obj['id'], `${path}.id`),
     path: resolve(assertString(obj['path'], `${path}.path`)),
     ...(typeof org === 'string' ? { org } : {}),
-    workspace: assertString(obj['workspace'], `${path}.workspace`),
+    ...(typeof workspace === 'string' ? { workspace } : {}),
     enabled: obj['enabled'] !== false,
-    bindings: bindingsRaw.map((b, i) => parseBinding(b, `${path}.bindings[${i}]`)),
+    bindings,
   };
 }
 

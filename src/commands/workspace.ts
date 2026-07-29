@@ -5,6 +5,8 @@ import { getClient } from '../lib/api.js';
 import { resolveOrg } from '../lib/resolve.js';
 import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
+import { confirmDestructive } from '../lib/confirm.js';
+import { resolveSlug } from '../lib/slug.js';
 
 type WorkspaceItem = { id: string; name: string; slug: string; created_at: string };
 
@@ -33,7 +35,7 @@ workspaceCommand
   .command('create')
   .description('Create a workspace')
   .requiredOption('-n, --name <name>', 'Workspace name')
-  .requiredOption('-s, --slug <slug>', 'URL-safe slug')
+  .option('-s, --slug <slug>', 'URL-safe slug (derived from --name when omitted)')
   .option('-o, --org <id>', 'Organisation ID')
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
@@ -42,7 +44,7 @@ workspaceCommand
       const data = await getClient().workspaces.create({
         organisation: org,
         name: opts.name,
-        slug: opts.slug,
+        slug: resolveSlug(opts.name, opts.slug),
       }) as { id: string; name: string; slug: string };
 
       if (opts.json) return output.json(data);
@@ -62,11 +64,13 @@ workspaceCommand
       await requirePermission('workspaces:delete');
       const org = resolveOrg(opts);
 
-      if (!opts.yes) {
-        console.log(chalk.yellow(`This will permanently delete workspace ${chalk.bold(slug)} and all its data.`));
-        console.log('Pass --yes to confirm.');
-        process.exit(0);
-      }
+      // Typed confirmation, not y/N: this takes every environment, pod and
+      // secret in the workspace with it, and there is no undo.
+      await confirmDestructive({
+        message: `This will permanently delete workspace ${chalk.bold(slug)} and all its data.`,
+        assumeYes: opts.yes,
+        requireTyped: slug,
+      });
 
       await getClient().workspaces.delete({ organisation: org, workspace: slug });
       output.success(`Deleted workspace ${chalk.bold(slug)}`);

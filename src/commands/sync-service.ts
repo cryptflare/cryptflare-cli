@@ -9,9 +9,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -29,6 +29,8 @@ import {
   type SyncProject,
 } from '../lib/sync-registry.js';
 import { getStatePath, loadState, saveState } from '../lib/sync-state.js';
+import { applyEnvChanges, parseEnvContent, renderEnvFile } from '../lib/env-file.js';
+import { MANIFEST_FILENAME, hasManifest, loadManifest, writeManifest } from '../lib/project-manifest.js';
 
 const DEFAULT_INTERVAL_S = 60;
 const MIN_INTERVAL_S = 15;
@@ -64,18 +66,21 @@ const addCommand = new Command('add')
   .option('-o, --org <id>', 'Organisation ID (defaults to the CLI default)')
   .option('-w, --workspace <slug>', 'Workspace slug (defaults to the CLI default)')
   .option(
-    '-b, --bind <file=environment...>',
-    'Bind an env file to an environment. Repeatable: --bind .env=dev --bind .env.local=dev-local',
+    '-b, --bind <file=[workspace/]environment...>',
+    'Bind an env file. Repeatable: --bind .env=dev --bind apps/web/.env=peak-web/dev',
   )
   .action(async (pathArg: string, opts) => {
     try {
       const root = resolve(pathArg);
       if (!existsSync(root)) throw new Error(`Directory not found: ${root}`);
 
-      const workspace = opts.workspace ?? getDefault('workspace');
-      if (!workspace) {
-        throw new Error('No workspace. Pass --workspace or set one with `cf config set defaults.workspace <slug>`.');
+      if (hasManifest(root) && !opts.bind) {
+        // The repo already carries its mapping; re-deriving it from flags is
+        // how the two drift apart.
+        output.warn(`${root} has a ${MANIFEST_FILENAME}. Use ${chalk.cyan('cf sync init')} to register from it.`);
+        console.log();
       }
+
       const org = opts.org ?? getOrg();
 
       const bindArgs: string[] = opts.bind ?? [];
@@ -91,9 +96,31 @@ const addCommand = new Command('add')
 
       const bindings = bindArgs.map((raw) => {
         const idx = raw.lastIndexOf('=');
-        if (idx <= 0) throw new Error(`Invalid --bind "${raw}". Expected <file>=<environment>.`);
-        return { file: raw.slice(0, idx), environment: raw.slice(idx + 1) };
+        if (idx <= 0) throw new Error(`Invalid --bind "${raw}". Expected <file>=[workspace/]<environment>.`);
+        const file = raw.slice(0, idx);
+        const target = raw.slice(idx + 1);
+
+        // `workspace/environment` targets a different workspace per binding,
+        // which is how one monorepo maps each app to its own access boundary.
+        const slash = target.indexOf('/');
+        if (slash > 0) {
+          return {
+            file,
+            workspace: target.slice(0, slash),
+            environment: target.slice(slash + 1),
+          };
+        }
+        return { file, environment: target };
       });
+
+      // Only needed as a default for bindings that did not name their own.
+      const workspace = opts.workspace ?? getDefault('workspace');
+      if (!workspace && bindings.some((b) => !b.workspace)) {
+        throw new Error(
+          'No workspace. Pass --workspace, set one with `cf config set defaults.workspace <slug>`, ' +
+            'or qualify each binding as --bind <file>=<workspace>/<environment>.',
+        );
+      }
 
       const id = opts.id ?? basename(root);
       const registry = loadRegistry();
@@ -102,7 +129,7 @@ const addCommand = new Command('add')
         id,
         path: root,
         ...(org ? { org } : {}),
-        workspace,
+        ...(workspace ? { workspace } : {}),
         enabled: true,
         bindings,
       };
@@ -114,7 +141,7 @@ const addCommand = new Command('add')
       output.success(`${existingIdx >= 0 ? 'Updated' : 'Registered'} ${chalk.bold(id)} -> ${root}`);
       for (const b of bindings) {
         const marker = existsSync(join(root, b.file)) ? chalk.dim('(exists)') : chalk.yellow('(will be created)');
-        console.log(`    ${b.file} ${chalk.dim('->')} ${workspace}/${b.environment} ${marker}`);
+        console.log(`    ${b.file} ${chalk.dim('->')} ${b.workspace ?? workspace}/${b.environment} ${marker}`);
       }
       console.log();
       console.log(chalk.dim(`  Registry: ${getRegistryPath()}`));
@@ -129,6 +156,169 @@ const addCommand = new Command('add')
 // ---------------------------------------------------------------------------
 // cf sync list / remove / enable / disable
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// cf sync init - the fresh-clone path
+// ---------------------------------------------------------------------------
+
+const initCommand = new Command('init')
+  .description('Set up a cloned project from its committed .cryptflare.json: pull every bound file, then register for sync')
+  .argument('[path]', 'Project root (defaults to the current directory)', '.')
+  .option('--write', 'Generate .cryptflare.json from this project\'s existing sync registration instead')
+  .option('--no-pull', 'Register for sync without pulling files first')
+  .option('--no-register', 'Pull files without registering for ongoing sync')
+  .option('-p, --project <id>', 'Which registered project to write from, when several share this directory')
+  .action(async (pathArg: string, opts) => {
+    try {
+      const root = resolve(pathArg);
+      if (!existsSync(root)) throw new Error(`Directory not found: ${root}`);
+
+      if (opts.write) {
+        writeManifestFromRegistry(root, opts.project);
+        return;
+      }
+
+      const manifest = loadManifest(root);
+      const id = manifest.id ?? basename(root);
+      const org = manifest.org ?? getOrg();
+
+      console.log();
+      console.log(`  ${chalk.bold(id)} ${chalk.dim(`(${manifest.bindings.length} file(s) from ${MANIFEST_FILENAME})`)}`);
+      console.log();
+
+      // Pull first, then register. Registering first would make the initial
+      // sync pass see empty local files and treat every remote key as new -
+      // correct, but it logs a pull of everything rather than a clean adopt.
+      if (opts.pull !== false) {
+        await requirePermission('secrets:read');
+        const client = getClient();
+
+        for (const binding of manifest.bindings) {
+          const target = join(root, binding.file);
+          const scope = {
+            ...(org ? { organisation: org } : {}),
+            workspace: binding.workspace!,
+            environment: binding.environment!,
+            ...(binding.pod ? { podId: binding.pod } : {}),
+          };
+
+          const secrets = new Map<string, string>();
+          for await (const secret of await client.secrets.list(scope)) {
+            const revealed = await client.secrets.reveal({ ...scope, key: secret.key });
+            secrets.set(revealed.key, revealed.value);
+          }
+
+          mkdirSync(dirname(target), { recursive: true });
+          if (existsSync(target)) {
+            // Merge rather than clobber: a cloned repo may ship a template
+            // file, and overwriting it would drop any comment or unmanaged
+            // line the author put there.
+            const original = readFileSync(target, 'utf-8');
+            const parsed = parseEnvContent(original);
+            const updates = new Map<string, string>();
+            const additions = new Map<string, string>();
+            for (const [k, v] of secrets) {
+              if (parsed.entries.has(k)) updates.set(k, v);
+              else additions.set(k, v);
+            }
+            const { content } = applyEnvChanges(original, updates, additions);
+            if (content !== original) writeFileSync(target, content, { encoding: 'utf-8', mode: 0o600 });
+          } else {
+            writeFileSync(target, renderEnvFile(secrets, '# Pulled by CryptFlare (cf sync init)'), {
+              encoding: 'utf-8',
+              mode: 0o600,
+            });
+          }
+
+          console.log(
+            `  ${chalk.green('✓')} ${binding.file} ${chalk.dim(`<- ${binding.workspace}/${binding.environment}`)} ` +
+              `${chalk.dim(`(${secrets.size} secret(s))`)}`,
+          );
+        }
+      }
+
+      if (opts.register !== false) {
+        const registry = loadRegistry();
+        const project: SyncProject = {
+          id,
+          path: root,
+          ...(org ? { org } : {}),
+          ...(manifest.workspace ? { workspace: manifest.workspace } : {}),
+          enabled: true,
+          bindings: manifest.bindings.map((b) => ({
+            file: b.file,
+            environment: b.environment!,
+            ...(b.pod ? { pod: b.pod } : {}),
+            ...(b.workspace && b.workspace !== manifest.workspace ? { workspace: b.workspace } : {}),
+          })),
+        };
+        const existing = registry.projects.findIndex((p) => p.id === id);
+        if (existing >= 0) registry.projects[existing] = project;
+        else registry.projects.push(project);
+        saveRegistry(registry);
+        console.log();
+        output.success(`Registered ${chalk.bold(id)} for ongoing sync.`);
+      }
+
+      console.log();
+      console.log('  Next:');
+      console.log(`    ${chalk.cyan(`cf sync status --project ${id}`)}`);
+      console.log(`    ${chalk.cyan('cf sync install-service --enable')}   ${chalk.dim('# run it in the background')}`);
+      console.log();
+    } catch (err) {
+      output.handleError(err);
+    }
+  });
+
+/** Generates `.cryptflare.json` from a project already registered locally. */
+function writeManifestFromRegistry(root: string, projectId?: string): void {
+  const registry = loadRegistry();
+  const atRoot = registry.projects.filter((p) => p.path === root);
+
+  if (atRoot.length === 0) {
+    throw new Error(
+      `No registered project at ${root}. Run \`cf sync add\` first, then \`cf sync init --write\`.`,
+    );
+  }
+
+  // More than one project can point at the same directory - registering a
+  // monorepo per-app produces exactly that. Picking the first silently writes
+  // a manifest covering one app and looking complete, so require a choice.
+  let project = atRoot[0]!;
+  if (projectId) {
+    const match = atRoot.find((p) => p.id === projectId);
+    if (!match) {
+      throw new Error(
+        `No project "${projectId}" registered at ${root}. Candidates: ${atRoot.map((p) => p.id).join(', ')}`,
+      );
+    }
+    project = match;
+  } else if (atRoot.length > 1) {
+    throw new Error(
+      `${atRoot.length} projects are registered at ${root}: ${atRoot.map((p) => p.id).join(', ')}. ` +
+        `Choose one with --project <id>.`,
+    );
+  }
+
+  const written = writeManifest(root, {
+    version: 1,
+    id: project.id,
+    ...(project.org ? { org: project.org } : {}),
+    ...(project.workspace ? { workspace: project.workspace } : {}),
+    bindings: project.bindings.map((b) => ({
+      file: b.file,
+      ...(b.workspace ? { workspace: b.workspace } : {}),
+      environment: b.environment,
+      ...(b.pod ? { pod: b.pod } : {}),
+    })),
+  });
+
+  output.success(`Wrote ${chalk.bold(written)}`);
+  console.log();
+  console.log(chalk.dim('  Commit it. It holds no secrets - only file paths and workspace/environment names -'));
+  console.log(chalk.dim('  so anyone cloning the repo can run `cf sync init` and be set up in one command.'));
+  console.log();
+}
 
 const listCommand = new Command('list')
   .description('List registered projects')
@@ -149,8 +339,10 @@ const listCommand = new Command('list')
           p.bindings.map((b) => ({
             project: p.id,
             file: b.file,
-            workspace: p.workspace,
+            // Per-binding workspace wins; the project value is only a default.
+            workspace: b.workspace ?? p.workspace ?? '(unset)',
             environment: b.environment,
+            pod: b.pod ?? 'root',
             enabled: p.enabled ? 'yes' : 'no',
             path: p.path,
           })),
@@ -626,6 +818,7 @@ const installServiceCommand = new Command('install-service')
 
 export const syncCommand = new Command('sync')
   .description('Keep local .env files in sync with CryptFlare environments')
+  .addCommand(initCommand)
   .addCommand(addCommand)
   .addCommand(listCommand)
   .addCommand(removeCommand)

@@ -81,13 +81,28 @@ export type ApplyResult = {
   changed: boolean;
 };
 
-type Scope = { organisation?: string; workspace: string; environment: string };
+/**
+ * `podId` is consumed by `secrets.list` (filters the listing) and
+ * `secrets.create` (places the new secret). `reveal` and `rotate` address a
+ * secret by key alone, which is unambiguous because the server enforces
+ * `unique(environment_id, key)` - pods are an organisational folder, not a
+ * namespace. Passing it to those calls is harmless; they ignore it.
+ */
+type Scope = { organisation?: string; workspace: string; environment: string; podId?: string };
 
 function scopeFor(project: SyncProject, binding: SyncBinding): Scope {
+  // A binding may name its own workspace, which is how one repository maps
+  // several apps to several workspaces. The registry guarantees at load time
+  // that at least one of the two is set.
+  const workspace = binding.workspace ?? project.workspace;
+  if (!workspace) {
+    throw new Error(`Binding ${binding.file} has no workspace and project ${project.id} sets no default.`);
+  }
   return {
     ...(project.org ? { organisation: project.org } : {}),
-    workspace: project.workspace,
+    workspace,
     environment: binding.environment,
+    ...(binding.pod ? { podId: binding.pod } : {}),
   };
 }
 

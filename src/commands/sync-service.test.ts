@@ -8,6 +8,7 @@ describe('cf sync command surface', () => {
       'add',
       'disable',
       'enable',
+      'init',
       'install-service',
       'list',
       'remove',

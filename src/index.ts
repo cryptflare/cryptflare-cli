@@ -10,6 +10,7 @@ import { orgCommand } from './commands/org.js';
 import { workspaceCommand } from './commands/workspace.js';
 import { environmentCommand } from './commands/environment.js';
 import { tokenCommand } from './commands/token.js';
+import { serviceTokenCommand } from './commands/service-token.js';
 import { auditCommand } from './commands/audit.js';
 import { configCommand } from './commands/config.js';
 import { whoamiCommand } from './commands/whoami.js';
@@ -20,13 +21,17 @@ import { telemetryCommand } from './commands/telemetry.js';
 import { updateCommand } from './commands/update.js';
 import { initCommand } from './commands/init.js';
 import { doctorCommand } from './commands/doctor.js';
+import { buildCompletionCommand } from './commands/completion.js';
 import { importCommand } from './commands/import.js';
 import { VERSION } from './version.js';
 
 const program = new Command()
   .name('cf')
   .description(`${BRAND.name} CLI - Manage secrets from your terminal`)
-  .version(VERSION);
+  .version(VERSION)
+  // Required for `cf run`'s passThroughOptions, which lets flags meant for the
+  // child process (-v, --watch) reach the child instead of being parsed here.
+  .enablePositionalOptions();
 
 // Auth & identity
 program.addCommand(authCommand);
@@ -57,6 +62,7 @@ program.addCommand(orgCommand);
 program.addCommand(workspaceCommand);
 program.addCommand(environmentCommand);
 program.addCommand(tokenCommand);
+program.addCommand(serviceTokenCommand);
 program.addCommand(auditCommand);
 
 // Status & config
@@ -68,5 +74,8 @@ program.addCommand(updateCommand);
 // Setup helpers
 program.addCommand(initCommand);
 program.addCommand(doctorCommand);
+
+// Built last so it can walk the fully-populated command tree.
+program.addCommand(buildCompletionCommand(program));
 
 program.parse();

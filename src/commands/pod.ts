@@ -6,6 +6,8 @@ import type { CryptFlare } from '@cryptflare/sdk';
 import { getClient } from '../lib/api.js';
 import { resolveContext } from '../lib/resolve.js';
 import * as output from '../lib/output.js';
+import { confirmDestructive } from '../lib/confirm.js';
+import { resolveSlug } from '../lib/slug.js';
 
 type PodItem = {
   id: string;
@@ -100,7 +102,7 @@ podCommand
   .command('create')
   .description('Create a new pod')
   .requiredOption('-n, --name <name>', 'Pod name')
-  .requiredOption('-s, --slug <slug>', 'URL-safe slug')
+  .option('-s, --slug <slug>', 'URL-safe slug (derived from --name when omitted)')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-e, --env <slug>', 'Environment ID or slug')
   .option('-o, --org <id>', 'Organisation ID')
@@ -113,7 +115,7 @@ podCommand
       const data = await getClient().pods.create({
         ...scopeOf(ctx),
         name: opts.name,
-        slug: opts.slug,
+        slug: resolveSlug(opts.name, opts.slug),
         ...(opts.parent ? { parentId: opts.parent } : {}),
         ...(opts.description ? { description: opts.description } : {}),
       } as never) as PodItem;
@@ -172,11 +174,10 @@ podCommand
     try {
       const ctx = resolveContext(opts);
 
-      if (!opts.yes) {
-        console.log(chalk.yellow('This will permanently delete this pod. It must be empty.'));
-        console.log('Pass --yes to confirm.');
-        process.exit(0);
-      }
+      await confirmDestructive({
+        message: 'This will permanently delete this pod. It must be empty.',
+        assumeYes: opts.yes,
+      });
 
       await getClient().pods.delete({ ...scopeOf(ctx), id: pod });
       output.success('Pod deleted');

@@ -1,3 +1,5 @@
+import { chmodSync, existsSync, statSync } from 'node:fs';
+
 import Conf from 'conf';
 
 type PermissionCacheEntry = {
@@ -29,6 +31,11 @@ type CfConfig = {
 
 const config = new Conf<CfConfig>({
   projectName: 'cryptflare',
+  // This file holds the bearer token. `conf` defaults to 0o666 before umask,
+  // which on a typical 0o022 umask lands at 0o644 - readable by every other
+  // user on the machine. `~/.config` being "typically protected", as conf's own
+  // docs put it, is not a property to rely on for a credential.
+  configFileMode: 0o600,
   schema: {
     token: { type: 'string' },
     org: { type: 'string' },
@@ -50,6 +57,32 @@ const config = new Conf<CfConfig>({
     },
   },
 });
+
+/**
+ * Tightens permissions on an existing config file.
+ *
+ * `configFileMode` only applies when conf creates the file, so anyone who
+ * authenticated before that option was set still has a 0644 file containing
+ * their token. Repair it on load rather than leaving the fix to a re-login
+ * nobody will think to do.
+ *
+ * Best-effort: a failure here must never stop the CLI working. chmod is a
+ * no-op on Windows, so it is skipped there.
+ */
+function ensureConfigFileIsPrivate(): void {
+  if (process.platform === 'win32') return;
+  try {
+    const path = config.path;
+    if (!existsSync(path)) return;
+    const mode = statSync(path).mode & 0o777;
+    if (mode !== 0o600) chmodSync(path, 0o600);
+  } catch {
+    // Unreadable, on a filesystem without permissions, or owned by someone
+    // else - none of which should prevent the command the user actually ran.
+  }
+}
+
+ensureConfigFileIsPrivate();
 
 export function isTelemetryEnabled(): boolean {
   // DO_NOT_TRACK and CF_TELEMETRY override the saved config.

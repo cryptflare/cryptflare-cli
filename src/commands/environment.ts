@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { getClient } from '../lib/api.js';
 import { resolveOrg } from '../lib/resolve.js';
 import * as output from '../lib/output.js';
+import { resolveSlug } from '../lib/slug.js';
 
 type EnvironmentItem = { id: string; name: string; slug: string; created_at: string };
 
@@ -42,7 +43,7 @@ environmentCommand
   .command('create')
   .description('Create an environment')
   .requiredOption('-n, --name <name>', 'Environment name')
-  .requiredOption('-s, --slug <slug>', 'URL-safe slug')
+  .option('-s, --slug <slug>', 'URL-safe slug (derived from --name when omitted)')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-o, --org <id>', 'Organisation ID')
   .option('--json', 'Output as JSON')
@@ -59,7 +60,7 @@ environmentCommand
         organisation: org,
         workspace,
         name: opts.name,
-        slug: opts.slug,
+        slug: resolveSlug(opts.name, opts.slug),
       }) as { id: string; name: string; slug: string };
 
       if (opts.json) return output.json(data);

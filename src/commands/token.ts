@@ -5,6 +5,7 @@ import { getClient } from '../lib/api.js';
 import { resolveOrg } from '../lib/resolve.js';
 import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
+import { confirmDestructive } from '../lib/confirm.js';
 
 type TokenItem = {
   id: string;
@@ -119,11 +120,10 @@ tokenCommand
       await requirePermission('tokens:revoke');
       const org = resolveOrg(opts);
 
-      if (!opts.yes) {
-        console.log(chalk.yellow('This will permanently revoke this token. It cannot be undone.'));
-        console.log('Pass --yes to confirm.');
-        process.exit(0);
-      }
+      await confirmDestructive({
+        message: 'This will permanently revoke this token. It cannot be undone.',
+        assumeYes: opts.yes,
+      });
 
       await getClient().tokens.revoke({ organisation: org, tokenId: id });
       output.success('Token revoked');
