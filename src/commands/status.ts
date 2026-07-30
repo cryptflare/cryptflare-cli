@@ -3,6 +3,7 @@ import chalk from 'chalk';
 
 import { getClient } from '../lib/api.js';
 import { resolveOrg } from '../lib/resolve.js';
+import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
 
 type Subscription = {
@@ -33,6 +34,10 @@ export const statusCommand = new Command('status')
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
     try {
+      // Checked up front so a scoped token gets the CLI's "Need: X. Have: Y."
+      // message naming the missing scope, rather than the server's 403, which
+      // reads as a role problem and sends owners looking in the wrong place.
+      await requirePermission('billing:read');
       const org = resolveOrg(opts);
 
       const sub = await getClient().billing.getSubscription({ organisation: org }) as Subscription;

@@ -39,6 +39,29 @@ const SOURCE_HELP = [
   '  keepass     KeePass XML',
 ].join('\n');
 
+/**
+ * Builds the `POST /secrets/import/external` body.
+ *
+ * Exported so its shape can be tested against `ImportRequestSchema`. The array
+ * field is `secrets`; this sent `items`, so every import failed validation
+ * with "secrets: Required" *after* reporting a successful parse - the command
+ * could never have worked. The request is hand-built rather than routed
+ * through the SDK, so neither the contract audit nor the SDK types covered it.
+ */
+export function buildImportBody(input: {
+  source: string;
+  conflictPolicy: ConflictPolicy;
+  pod?: unknown;
+  items: ImportItem[];
+}): Record<string, unknown> {
+  return {
+    source: input.source,
+    conflictPolicy: input.conflictPolicy,
+    ...(typeof input.pod === 'string' && input.pod !== '' ? { podId: input.pod } : {}),
+    secrets: input.items,
+  };
+}
+
 export const importCommand = new Command('import')
   .description('Import secrets from .env, Doppler, or a password-manager export')
   .option('-s, --source <id>', 'Source format: dotenv, doppler, 1password, bitwarden, lastpass, protonpass, dashlane, keepass')
@@ -125,12 +148,12 @@ export const importCommand = new Command('import')
       const result = await client.runner.send<{ data: ImportResult }>({
         method: 'POST',
         path: `/v1/organisations/${encodeURIComponent(ctx.org)}/workspaces/${encodeURIComponent(ctx.workspace)}/environments/${encodeURIComponent(ctx.env)}/secrets/import/external`,
-        body: {
+        body: buildImportBody({
           source: opts.source,
           conflictPolicy: conflictPolicy as ConflictPolicy,
-          ...(typeof opts.pod === 'string' && opts.pod !== '' ? { podId: opts.pod } : {}),
+          pod: opts.pod,
           items,
-        },
+        }),
       });
       sendSpinner.stop();
 

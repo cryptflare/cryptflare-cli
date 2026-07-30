@@ -6,6 +6,7 @@ import { resolveOrg } from '../lib/resolve.js';
 import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
 import { confirmDestructive } from '../lib/confirm.js';
+import { parseApiTimestamp } from '../lib/timestamps.js';
 
 type TokenItem = {
   id: string;
@@ -26,6 +27,29 @@ type CreatedToken = {
   ipAllowlist: string[] | null;
 };
 
+/**
+ * Condenses a scope list to a count plus the resources it touches, so one
+ * broad token cannot blow the column width out to a thousand characters.
+ */
+function summariseScopes(scopes: string[]): string {
+  if (scopes.length === 0) return chalk.dim('none');
+  if (scopes.length <= 3) return scopes.join(', ');
+  const resources = [...new Set(scopes.map((s) => s.split(':')[0]))];
+  const shown = resources.slice(0, 4).join(', ');
+  const more = resources.length > 4 ? `, +${resources.length - 4} more` : '';
+  return `${scopes.length} scopes ${chalk.dim(`(${shown}${more})`)}`;
+}
+
+/** Formats an expiry, calling out one that has already passed. */
+function renderExpiry(expiresAt: string | null): string {
+  if (!expiresAt) return chalk.dim('never');
+  // Unparseable input yields an invalid Date, whose getTime() is NaN and whose
+  // comparisons are all false - so a malformed expiry prints as-is.
+  const at = parseApiTimestamp(expiresAt).getTime();
+  if (!Number.isNaN(at) && at < Date.now()) return chalk.red(`${expiresAt} (expired)`);
+  return expiresAt;
+}
+
 export const tokenCommand = new Command('token')
   .description('Manage API tokens');
 
@@ -44,11 +68,20 @@ tokenCommand
         data.map((t) => ({
           name: t.name,
           prefix: chalk.dim(t.tokenPrefix + '...'),
-          scopes: t.scopes.join(', '),
-          expires: t.expiresAt ?? chalk.dim('never'),
+          // Joining every scope produced a single ~1,000-character cell, and
+          // the table sizes columns to their widest value - one broad token
+          // made the whole listing unreadable. The count is what you scan for;
+          // `--json` carries the full set.
+          scopes: summariseScopes(t.scopes),
+          // An expired token renders identically to a live one, so a listing
+          // gives no hint why calls started failing. Say so on the row.
+          expires: renderExpiry(t.expiresAt),
           ipAllowlist: t.ipAllowlist?.length ? `${t.ipAllowlist.length} entries` : chalk.dim('any'),
         })),
       );
+      if (data.length > 0) {
+        console.log(chalk.dim(`\n  Full scopes: ${chalk.cyan('cf token list --json')}`));
+      }
     } catch (err) {
       output.handleError(err);
     }

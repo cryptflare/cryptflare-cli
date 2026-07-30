@@ -1,5 +1,23 @@
 # @cryptflare/cli
 
+## 0.5.2
+
+### Patch Changes
+
+- bc0656b: Fix `cf import`, and make several listings usable.
+  - `cf import` sent its secrets array as `items`, but the server validates `secrets`, so every import failed with "secrets: Required" after reporting a successful parse - the command could not have worked. The body is now built by an exported, tested function checked against `ImportRequestSchema`.
+  - `cf config list` printed the API token in full; it is masked to its prefix unless `--reveal` is passed. `cf config get` printed `[object Object]` for the two keys whose values are objects.
+  - `cf token list` joined every scope into one cell, producing a ~1,000-character-wide table; it now shows a count plus the resources touched, and marks expired tokens.
+  - Added `cf audit list`, which every other resource group already had, and `cf config path`.
+  - `cf status` now names the missing `billing:read` permission up front instead of surfacing a server 403 that reads as a role problem.
+
+- bc0656b: Quote written `.env` values so sourcing the file cannot execute them.
+
+  `cf pull` wrote every value needing quotes in double quotes, escaping only `\`, `"` and newlines. A shell expands `$VAR` and runs `` `cmd` `` inside double quotes, so a secret containing either was both corrupted and executed on `set -a; . .env` - a command injection, since a secret's contents are attacker-influenced in the general case. Values are now written in single quotes, which are literal in both a shell and dotenv; double quotes are used only for values containing a single quote or newline, where `$`, backtick, `"` and `\` are escaped. Verified by round-tripping thirteen hostile values through both the parser and a real shell.
+
+- Updated dependencies [bc0656b]
+  - @cryptflare/sdk@1.0.2
+
 ## 0.5.1
 
 ### Patch Changes

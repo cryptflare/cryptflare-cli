@@ -8,12 +8,27 @@ import { getStatePath } from '../lib/sync-state.js';
 export const configCommand = new Command('config')
   .description('Manage CLI configuration');
 
+/**
+ * Replaces the API key with its identifying prefix.
+ *
+ * `cf config list` printed `cf_live_...` in full. That output is what people
+ * paste into bug reports, screen shares, and support threads, so the default
+ * has to be safe; the prefix is what `cf token list` shows and is enough to
+ * tell which token is active. `--reveal` prints it for the cases that need it.
+ */
+function maskToken<T extends Record<string, unknown>>(config: T): T {
+  const token = config.token;
+  if (typeof token !== 'string' || token.length === 0) return config;
+  return { ...config, token: `${token.slice(0, 12)}... (${token.length} chars, --reveal to show)` };
+}
+
 configCommand
   .command('list')
   .description('Show all configuration')
   .option('--json', 'Output as JSON')
+  .option('--reveal', 'Print the API token in full instead of masking it')
   .action((opts) => {
-    const config = getAllConfig();
+    const config = opts.reveal ? getAllConfig() : maskToken(getAllConfig());
     if (opts.json) return output.json(config);
 
     console.log(chalk.dim(`Config file: ${getConfigPath()}`));
@@ -45,8 +60,9 @@ configCommand
 configCommand
   .command('get <key>')
   .description('Get a configuration value')
-  .action((key: string) => {
-    const config = getAllConfig();
+  .option('--reveal', 'Print the API token in full instead of masking it')
+  .action((key: string, opts) => {
+    const config = opts.reveal ? getAllConfig() : maskToken(getAllConfig());
     const keys = key.split('.');
     let value: unknown = config;
     for (const k of keys) {
@@ -57,7 +73,11 @@ configCommand
         return;
       }
     }
-    console.log(String(value));
+    // `String(anObject)` is "[object Object]", which is what `cf config get
+    // permissions` and `cf config get defaults` printed - the two keys whose
+    // values are objects, so the command was useless for exactly the cases
+    // where you most want to read the config.
+    console.log(typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : String(value));
   });
 
 configCommand

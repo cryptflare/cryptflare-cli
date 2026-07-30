@@ -122,13 +122,37 @@ export function parseEnvContent(content: string): ParsedEnvFile {
   return { lines, entries, trailingNewline };
 }
 
-/** Values needing quotes: anything a bare shell word could not survive. */
+/**
+ * Renders a value so that reading the file back - with this parser, with
+ * dotenv, or by sourcing it in a shell - yields the original bytes.
+ *
+ * Single quotes are preferred because they are literal everywhere. Double
+ * quotes are not: a shell expands `$VAR` and runs `` `cmd` `` inside them, so
+ * writing `SECRET="it's $HOME `id`"` (which this did) both corrupted the value
+ * and executed the secret's contents on `set -a; . .env`. A secret is attacker
+ * -influenced data in the general case, which makes that a command injection,
+ * not just a quoting bug.
+ *
+ * Double quotes are used only when the value contains a single quote or a
+ * newline, neither of which a single-quoted form can represent - the shell has
+ * no escape inside single quotes, and dotenv does not accept the `'\''`
+ * concatenation trick. There `$`, backtick, `"` and `\` are escaped, which
+ * this parser and a shell both undo.
+ */
 function renderValue(value: string): string {
-  if (value === '') return '""';
-  if (/[\s#"'=$`\\]|^$/.test(value)) {
-    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  if (value === '') return "''";
+
+  if (value.includes("'") || value.includes('\n')) {
+    const escaped = value
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\$/g, '\\$')
+      .replace(/`/g, '\\`')
+      .replace(/\n/g, '\\n');
     return `"${escaped}"`;
   }
+
+  if (/[\s#"=$`\\]/.test(value)) return `'${value}'`;
   return value;
 }
 

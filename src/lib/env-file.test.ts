@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+
 import { describe, it, expect } from 'vitest';
 
 import { applyEnvChanges, MANAGED_BLOCK_HEADER, parseEnvContent, renderEnvFile, toValueMap } from './env-file.js';
@@ -69,9 +71,11 @@ describe('applyEnvChanges', () => {
     expect(content).toBe('  export PORT=4000 # dev only');
   });
 
-  it('quotes values that need it', () => {
+  it('quotes values that need it, single by default', () => {
+    // Single quotes are literal in both a shell and dotenv; double quotes let
+    // the shell expand the value. See the quoting suite below.
     const { content } = applyEnvChanges('A=1', new Map([['A', 'two words']]));
-    expect(content).toBe('A="two words"');
+    expect(content).toBe("A='two words'");
   });
 
   it('appends unknown keys under a managed block', () => {
@@ -163,5 +167,56 @@ describe('applyEnvChanges', () => {
   it('preserves the absence of a trailing newline', () => {
     expect(applyEnvChanges('A=1', new Map([['A', '2']])).content).toBe('A=2');
     expect(applyEnvChanges('A=1\n', new Map([['A', '2']])).content).toBe('A=2\n');
+  });
+});
+
+describe('value quoting', () => {
+  /** Round-trips a value through the writer and back through the parser. */
+  const roundTrip = (value: string): string => {
+    const { content } = applyEnvChanges('KEY=placeholder', new Map([['KEY', value]]));
+    return toValueMap(parseEnvContent(content)).get('KEY')!;
+  };
+
+  /** What a POSIX shell makes of the rendered line - `cf pull` output is sourced. */
+  const sourced = (value: string): string => {
+    const { content } = applyEnvChanges('KEY=placeholder', new Map([['KEY', value]]));
+    const script = `${content}\nprintf %s "$KEY"`;
+    return execFileSync('sh', ['-c', script], { encoding: 'utf-8' });
+  };
+
+  const NASTY = [
+    ['expansion', 'before $HOME after'],
+    ['command substitution', 'before `id` after'],
+    ['modern substitution', 'before $(id) after'],
+    ['single quote', "it's fine"],
+    ['double quote', 'say "hello"'],
+    ['both quotes', `mixed "double" and 'single'`],
+    ['backslash', 'C:\\path\\to\\file'],
+    ['newline', 'line one\nline two'],
+    ['hash', 'value # not a comment'],
+    ['equals', 'key=value=more'],
+    ['spaces', '  padded  '],
+    ['empty', ''],
+    ['everything', `it's $HOME \`id\` "quoted" \\ #hash`],
+  ] as const;
+
+  it.each(NASTY)('round-trips a value containing a %s', (_name, value) => {
+    expect(roundTrip(value)).toBe(value);
+  });
+
+  it.each(NASTY.filter(([, v]) => !v.includes('\n')))(
+    'survives being sourced by a shell when it contains a %s',
+    (_name, value) => {
+      // The bug this pins: `SECRET="$HOME `id`"` expanded the variable and ran
+      // the command when the pulled file was sourced with `set -a; . .env`.
+      expect(sourced(value)).toBe(value);
+    },
+  );
+
+  it('never emits an unescaped expansion inside double quotes', () => {
+    const { content } = applyEnvChanges('KEY=x', new Map([['KEY', `it's $HOME \`id\``]]));
+    const line = content.split('\n').find((l) => l.startsWith('KEY='))!;
+    expect(line).not.toMatch(/"[^"]*[^\\]\$/);
+    expect(line).not.toMatch(/"[^"]*[^\\]`/);
   });
 });
