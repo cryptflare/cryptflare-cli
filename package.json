@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "@cryptflare/sdk": "^1.1.0",
-    "chalk": "^5.6.2",
+    "chalk": "^6.0.0",
     "commander": "^14.0.3",
     "conf": "^15.1.0",
     "open": "^11.0.0",
