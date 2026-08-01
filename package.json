@@ -1,6 +1,6 @@
 {
   "name": "@cryptflare/cli",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Command-line interface for CryptFlare. Manage secrets, pods, environments, and tokens from your terminal.",
   "license": "Apache-2.0",
   "author": {

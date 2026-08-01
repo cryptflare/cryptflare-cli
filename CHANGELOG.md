@@ -1,5 +1,31 @@
 # @cryptflare/cli
 
+## 0.7.0
+
+### Minor Changes
+
+- 713949b: Show progress while the CLI is working, instead of appearing frozen.
+
+  Only five commands had a spinner, so most of the CLI - `cf secret list`, `cf workspace list`, `cf sync run` and the rest - printed nothing at all until their output appeared. Worse, the SDK sleeps for up to a minute waiting out the reveal endpoint's 30/min rate limit, and did so in complete silence: no output, no exit, indistinguishable from a hang. That silence is what made a large `cf sync init` look dead for two minutes.
+
+  Progress is now driven from the client's request hooks, so every command gets it without each one remembering, and a rate-limit wait shows a live countdown saying why it is waiting and for how long. Command-specific labels still win where they exist, since "Comparing with remote..." beats a generic "Fetching secrets...".
+
+  Spinners render to stderr and only on a TTY, so `cf env -f json | jq` and `cf pull --json > file` stay clean and CI logs do not fill with escape codes.
+
+- a5b1018: Add `cf sync init --create` to provision a project from its manifest.
+
+  `cf sync init` only ever pulled, which assumed someone had already built the remote structure by hand. For a repository whose `.cryptflare.json` names six environments that meant `cf workspace create` plus one `cf environment create` per environment before a single secret could move - thirteen commands for a small repo - and skipping it made the pull fail with an opaque "workspace not found".
+
+  `--create` reads the manifest, creates any workspace or environment it names that does not exist, then pushes each local file up to seed it. It is idempotent, so it is safe to re-run over a partially provisioned project, and each file is validated in full before anything is sent.
+
+### Patch Changes
+
+- 8abb817: Reject two projects binding the same file on disk.
+
+  The registry rejected a duplicate project id, and a duplicate file within one project, but nothing stopped two different projects claiming the same path. A real registry drifted into exactly that - `peak-blog` and `peak-physique` both owning `apps/blog/.env` in the same directory - which gives one file two independent merge bases: every pass processes it twice, and a write by one project reads as a local edit to the other. It is now refused at load, naming both projects.
+
+  Binding the same relative filename in different repositories is unaffected, since paths resolve against each project's root.
+
 ## 0.6.0
 
 ### Minor Changes

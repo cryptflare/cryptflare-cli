@@ -1,12 +1,12 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import ora from 'ora';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 
 import { getClient } from '../lib/api.js';
 import { resolveContext } from '../lib/resolve.js';
 import * as output from '../lib/output.js';
+import * as progress from '../lib/progress.js';
 
 type ConflictPolicy = 'skip' | 'overwrite' | 'suffix';
 
@@ -106,7 +106,7 @@ export const importCommand = new Command('import')
       const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env };
       const client = getClient();
 
-      const spinner = ora(`Parsing ${opts.file}...`).start();
+      progress.start(`Parsing ${opts.file}...`);
 
       const fileBytes = readFileSync(opts.file);
 
@@ -119,11 +119,11 @@ export const importCommand = new Command('import')
       try {
         items = await parseSource(opts.source, fileBytes, opts.passphrase as string | undefined);
       } catch (err) {
-        spinner.fail(`Parse failed: ${(err as Error).message}`);
+        progress.fail(`Parse failed: ${(err as Error).message}`);
         process.exit(1);
       }
 
-      spinner.succeed(`Parsed ${items.length} secret${items.length === 1 ? '' : 's'} from ${opts.source}`);
+      progress.succeed(`Parsed ${items.length} secret${items.length === 1 ? '' : 's'} from ${opts.source}`);
 
       if (items.length === 0) {
         output.warn('Nothing to import.');
@@ -144,7 +144,7 @@ export const importCommand = new Command('import')
       }
 
       // Send to API -------------------------------------------------------
-      const sendSpinner = ora(`Pushing ${items.length} secret${items.length === 1 ? '' : 's'}...`).start();
+      progress.start(`Pushing ${items.length} secret${items.length === 1 ? '' : 's'}...`);
       const result = await client.runner.send<{ data: ImportResult }>({
         method: 'POST',
         path: `/v1/organisations/${encodeURIComponent(ctx.org)}/workspaces/${encodeURIComponent(ctx.workspace)}/environments/${encodeURIComponent(ctx.env)}/secrets/import/external`,
@@ -155,7 +155,7 @@ export const importCommand = new Command('import')
           items,
         }),
       });
-      sendSpinner.stop();
+      progress.stop();
 
       if (opts.json) {
         output.json(result.data);

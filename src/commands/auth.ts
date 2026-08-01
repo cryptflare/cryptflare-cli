@@ -1,6 +1,5 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import ora from 'ora';
 import open from 'open';
 
 import { BRAND } from '../_vendored/brand';
@@ -8,6 +7,7 @@ import { BRAND } from '../_vendored/brand';
 import { getAnonymousClient, getClient, resetClient, ApiError } from '../lib/api.js';
 import { getToken, setToken, clearToken, setOrg, getConfigPath } from '../lib/config.js';
 import { success, warn, handleError } from '../lib/output.js';
+import * as progress from '../lib/progress.js';
 
 const DIVIDER = chalk.dim('─'.repeat(48));
 
@@ -57,12 +57,12 @@ authCommand
     // must not require one - `getClient()` throws when the config is empty,
     // which made `cf auth login` impossible right after `cf auth logout`.
     const client = getAnonymousClient();
-    const spinner = ora({ text: 'Requesting device code...', indent: 2 }).start();
+    progress.start('Requesting device code...');
 
     try {
       const device = await client.cli.requestDeviceCode({}) as DeviceResponse;
 
-      spinner.stop();
+      progress.stop();
 
       console.log();
       console.log(`  ${chalk.bold('Authorize this device')}`);
@@ -87,8 +87,7 @@ authCommand
       }
 
       console.log();
-      spinner.start('Waiting for browser approval...');
-      spinner.indent = 2;
+      progress.start('Waiting for browser approval...');
 
       const pollMs = Math.max((device.interval ?? 5) * 1000, 3000);
       const deadline = Date.now() + device.expiresIn * 1000;
@@ -109,7 +108,7 @@ authCommand
           // picks up the token that was just saved rather than a stale one.
           resetClient();
 
-          spinner.stop();
+          progress.stop();
 
           const masked = result.apiKey.slice(0, 12) + '...' + result.apiKey.slice(-4);
 
@@ -125,17 +124,17 @@ authCommand
         } catch (err) {
           if (err instanceof ApiError && err.code === 'AUTH_PENDING') continue;
           if (err instanceof ApiError && err.code === 'RESOURCE_NOT_FOUND') {
-            spinner.fail('Device code expired. Run `cf auth login` again.');
+            progress.fail('Device code expired. Run `cf auth login` again.');
             process.exit(1);
           }
           throw err;
         }
       }
 
-      spinner.fail('Timed out waiting for approval. Run `cf auth login` again.');
+      progress.fail('Timed out waiting for approval. Run `cf auth login` again.');
       process.exit(1);
     } catch (err) {
-      spinner.stop();
+      progress.stop();
       handleError(err);
     }
   });

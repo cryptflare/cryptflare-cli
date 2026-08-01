@@ -2,6 +2,7 @@ import { ConfigurationError, CryptFlare, CryptFlareError } from '@cryptflare/sdk
 import type { HttpMethod } from '@cryptflare/sdk';
 import { BRAND } from '../_vendored/brand';
 
+import * as progress from './progress.js';
 import { getToken } from './config.js';
 
 const BASE_URL = process.env.CF_API_URL ?? BRAND.urls.api;
@@ -26,6 +27,28 @@ export function getClient(token?: string): CryptFlare {
     apiKey,
     baseUrl: BASE_URL,
     userAgentSuffix: 'cli',
+    hooks: {
+      // Every request gets a spinner, rather than each command remembering to
+      // start one. Only a handful did, so most of the CLI simply sat there:
+      // `cf secret list`, `cf workspace list` and the rest showed nothing at
+      // all until their output appeared.
+      onRequest: ({ method, path }) => progress.startIfIdle(progress.describeRequest(method, path)),
+      onResponse: () => progress.stop(),
+      // Without this the CLI is silent for the whole backoff. The reveal
+      // endpoint allows 30/min, so any sizeable pull hits it and the SDK
+      // sleeps for up to a minute with no output and no exit - which looks
+      // exactly like a hang. Say what is happening and count it down.
+      onRetry: ({ delayMs, error }) => {
+        const status = (error as { status?: number }).status;
+        const reason = status === 429
+          ? 'Rate limited by the API, resuming in'
+          : `Request failed (${status ?? 'network'}), retrying in`;
+        const cancel = progress.countdown(reason, delayMs);
+        // The SDK sleeps for delayMs immediately after this hook, so the timer
+        // is cleared just past that point rather than left to run on.
+        setTimeout(cancel, delayMs + 100).unref?.();
+      },
+    },
   });
   return cached;
 }

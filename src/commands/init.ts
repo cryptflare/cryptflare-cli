@@ -1,11 +1,11 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import ora from 'ora';
 import prompts from 'prompts';
 
 import { getClient } from '../lib/api.js';
 import { getToken, setOrg, setDefault, getConfigPath } from '../lib/config.js';
 import * as output from '../lib/output.js';
+import * as progress from '../lib/progress.js';
 
 type Org = { id: string; name: string; plan?: string };
 type Workspace = { id: string; name: string; slug: string };
@@ -74,9 +74,9 @@ async function chooseOrg(client: ReturnType<typeof getClient>, opts: { org?: str
   if (opts.org) {
     return { id: opts.org, name: opts.org };
   }
-  const spinner = ora('Loading organisations...').start();
+  progress.start('Loading organisations...');
   const orgs = await client.organisations.list() as Org[];
-  spinner.stop();
+  progress.stop();
   if (!orgs.length) {
     console.log(chalk.yellow('  You are not a member of any organisation. Visit https://vault.cryptflare.com/onboarding to create one.'));
     return undefined;
@@ -105,9 +105,9 @@ async function chooseWorkspace(client: ReturnType<typeof getClient>, organisatio
   if (opts.workspace) {
     return { id: opts.workspace, name: opts.workspace, slug: opts.workspace };
   }
-  const spinner = ora('Loading workspaces...').start();
+  progress.start('Loading workspaces...');
   const workspaces = await client.workspaces.list({ organisation }) as Workspace[];
-  spinner.stop();
+  progress.stop();
   if (!workspaces.length) {
     console.log(chalk.yellow('  No workspaces in this organisation. Create one in the dashboard or via `cf workspace create`.'));
     return undefined;
@@ -132,9 +132,9 @@ async function chooseEnvironment(client: ReturnType<typeof getClient>, organisat
   if (opts.env) {
     return { id: opts.env, name: opts.env, slug: opts.env };
   }
-  const spinner = ora('Loading environments...').start();
+  progress.start('Loading environments...');
   const envs = await client.environments.list({ organisation, workspace }) as Environment[];
-  spinner.stop();
+  progress.stop();
   if (!envs.length) {
     console.log(chalk.yellow('  No environments in this workspace. Create one via `cf environment create`.'));
     return undefined;

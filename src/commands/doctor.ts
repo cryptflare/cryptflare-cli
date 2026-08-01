@@ -1,12 +1,12 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import ora from 'ora';
 import { existsSync } from 'node:fs';
 
 import { BRAND } from '../_vendored/brand';
 
 import { getClient } from '../lib/api.js';
 import { getToken, getOrg, getDefault, getConfigPath } from '../lib/config.js';
+import * as progress from '../lib/progress.js';
 import { VERSION } from '../version.js';
 
 type CheckStatus = 'pass' | 'warn' | 'fail' | 'skip';
@@ -90,11 +90,10 @@ async function checkApi(): Promise<Check[]> {
   if (!getToken()) {
     return [{ name: 'API reachable', status: 'skip', detail: 'no credential' }];
   }
-  const spinner = ora({ text: `Calling ${BRAND.urls.api}/v1/auth/whoami...`, isSilent: true }).start();
   const checks: Check[] = [];
   try {
     const me = await getClient().me.get() as { email?: string; tokenKind?: string };
-    spinner.stop();
+    progress.stop();
     checks.push({
       name: 'API reachable',
       status: 'pass',
@@ -108,7 +107,7 @@ async function checkApi(): Promise<Check[]> {
         : `${me.tokenKind ?? 'token'} accepted`,
     });
   } catch (err) {
-    spinner.stop();
+    progress.stop();
     const message = err instanceof Error ? err.message : String(err);
     checks.push({
       name: 'API reachable',

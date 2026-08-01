@@ -2,12 +2,12 @@ import { Command } from 'commander';
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import chalk from 'chalk';
-import ora from 'ora';
 
 import { getClient } from '../lib/api.js';
 import { resolveContext } from '../lib/resolve.js';
 import { requirePermission } from '../lib/permissions.js';
 import * as output from '../lib/output.js';
+import * as progress from '../lib/progress.js';
 // One parser for every command.  previously carried its own, which
 // did not understand a leading `export `, so an .envrc line became the key
 // "export CLOUDFLARE_API_TOKEN" and the API rejected it as not
@@ -72,7 +72,7 @@ The file is written with mode 0600, since it holds plaintext secrets.`,
       const ctx = resolveContext(opts);
       const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env };
       const client = getClient();
-      const spinner = ora('Fetching secrets...').start();
+      progress.start('Fetching secrets...');
 
       // One request for the whole environment. This was a list plus one
       // reveal per key, so a 23-secret file cost 24 round trips.
@@ -80,11 +80,11 @@ The file is written with mode 0600, since it holds plaintext secrets.`,
       const count = revealed.size;
 
       if (count === 0) {
-        spinner.info('No secrets found in this environment.');
+        progress.info('No secrets found in this environment.');
         return;
       }
 
-      spinner.stop();
+      progress.stop();
 
       if (opts.json) {
         output.json(Object.fromEntries(revealed));
@@ -177,7 +177,7 @@ export const pushCommand = new Command('push')
         process.exit(1);
       }
 
-      const spinner = ora('Comparing with remote...').start();
+      progress.start('Comparing with remote...');
 
       const remoteKeys = new Set<string>();
       const remotePage = await client.secrets.list(scope);
@@ -192,7 +192,7 @@ export const pushCommand = new Command('push')
         else toCreate.push({ key, value });
       }
 
-      spinner.stop();
+      progress.stop();
 
       if (opts.dryRun) {
         console.log();
@@ -211,7 +211,7 @@ export const pushCommand = new Command('push')
         return;
       }
 
-      const pushSpinner = ora(`Pushing ${local.size} secrets...`).start();
+      progress.start(`Pushing ${local.size} secrets...`);
       const landed: string[] = [];
 
       // Batch endpoints instead of one request per key: each batch is a single
@@ -220,17 +220,17 @@ export const pushCommand = new Command('push')
       // of the window in which a transient failure can half-apply a file.
       try {
         for (const batch of chunk(toCreate)) {
-          pushSpinner.text = `Creating ${batch.length} secrets...`;
+          progress.update(`Creating ${batch.length} secrets...`);
           await client.secrets.batchCreate({ ...scope, secrets: batch });
           landed.push(...batch.map((s) => s.key));
         }
         for (const batch of chunk(toUpdate)) {
-          pushSpinner.text = `Updating ${batch.length} secrets...`;
+          progress.update(`Updating ${batch.length} secrets...`);
           await client.secrets.batchUpdate({ ...scope, secrets: batch });
           landed.push(...batch.map((s) => s.key));
         }
       } catch (err) {
-        pushSpinner.stop();
+        progress.stop();
         // Say what did land. A bare error leaves the caller unable to tell an
         // untouched environment from a partly-written one.
         if (landed.length > 0) {
@@ -244,7 +244,7 @@ export const pushCommand = new Command('push')
         throw err;
       }
 
-      pushSpinner.stop();
+      progress.stop();
       output.success(`Pushed ${chalk.bold(String(landed.length))} secrets (${chalk.green(`+${toCreate.length}`)} new, ${chalk.blue(`~${toUpdate.length}`)} updated)`);
     } catch (err) {
       output.handleError(err);
@@ -274,7 +274,7 @@ export const diffCommand = new Command('diff')
       const content = readFileSync(opts.file, 'utf-8');
       const local = parseEnvFile(content);
 
-      const spinner = ora('Comparing...').start();
+      progress.start('Comparing...');
 
       const remoteKeys = new Set<string>();
       const diffPage = await client.secrets.list(scope);
@@ -282,7 +282,7 @@ export const diffCommand = new Command('diff')
         remoteKeys.add(secret.key);
       }
 
-      spinner.stop();
+      progress.stop();
 
       const onlyLocal: string[] = [];
       const onlyRemote: string[] = [];
@@ -300,7 +300,7 @@ export const diffCommand = new Command('diff')
       // key, each of which is a rate-limited, audit-logged decryption.
       const changed: string[] = [];
       if (opts.values && common.length > 0) {
-        const valueSpinner = ora(`Comparing ${common.length} value(s)...`).start();
+        progress.start(`Comparing ${common.length} value(s)...`);
         try {
           const remote = await revealSecrets(client, scope, common);
           for (const key of common) {
@@ -308,7 +308,7 @@ export const diffCommand = new Command('diff')
             if (value !== undefined && value !== local.get(key)) changed.push(key);
           }
         } finally {
-          valueSpinner.stop();
+          progress.stop();
         }
       }
 

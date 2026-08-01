@@ -177,6 +177,15 @@ export function parseRegistry(raw: unknown): SyncRegistry {
   const projects = projectsRaw.map((p, i) => parseProject(p, `projects[${i}]`));
 
   const seen = new Set<string>();
+  // Absolute path -> the project that claimed it. Two projects binding one
+  // file is the same hazard as one project binding it twice, but it slipped
+  // through: the per-project check below only sees relative paths within a
+  // single project. A real registry ended up with `peak-blog` and
+  // `peak-physique` both owning apps/blog/.env at the same directory, which
+  // gives that file two independent merge bases. Each pass then processes it
+  // twice, and a write by one is read as a local edit by the other.
+  const claimedPaths = new Map<string, string>();
+
   for (const project of projects) {
     if (seen.has(project.id)) {
       throw new RegistryError(`duplicate project id "${project.id}"`);
@@ -191,6 +200,16 @@ export function parseRegistry(raw: unknown): SyncRegistry {
         throw new RegistryError(`project "${project.id}" binds ${binding.file} more than once`);
       }
       files.add(binding.file);
+
+      const absolute = bindingFilePath(project, binding);
+      const owner = claimedPaths.get(absolute);
+      if (owner !== undefined) {
+        throw new RegistryError(
+          `projects "${owner}" and "${project.id}" both bind ${absolute}. `
+            + `One file cannot have two merge bases - remove one with \`cf sync remove\`.`,
+        );
+      }
+      claimedPaths.set(absolute, project.id);
     }
   }
 

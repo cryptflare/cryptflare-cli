@@ -30,7 +30,8 @@ import {
 } from '../lib/sync-registry.js';
 import { getStatePath, loadState, saveState } from '../lib/sync-state.js';
 import { revealSecrets } from '../lib/reveal.js';
-import { applyEnvChanges, parseEnvContent, renderEnvFile } from '../lib/env-file.js';
+import { ensureScope, seedFromValues } from '../lib/provision.js';
+import { applyEnvChanges, parseEnvContent, renderEnvFile, toValueMap } from '../lib/env-file.js';
 import { MANIFEST_FILENAME, hasManifest, loadManifest, writeManifest } from '../lib/project-manifest.js';
 
 const DEFAULT_INTERVAL_S = 60;
@@ -170,6 +171,7 @@ const initCommand = new Command('init')
   .option('--no-register', 'Pull files without registering for ongoing sync')
   .option('-p, --project <id>', 'Which registered project to write from, when several share this directory')
   .option('--id <id>', 'Register under this id instead of the manifest\'s, for a second checkout of the same repo')
+  .option('--create', 'Create any workspace or environment the manifest names but CryptFlare does not have, then push each local file up. For a project that has never been synced.')
   .action(async (pathArg: string, opts) => {
     try {
       const root = resolve(pathArg);
@@ -196,6 +198,61 @@ const initCommand = new Command('init')
       // which files are missing. Every binding is attempted, failures are
       // listed at the end, and the exit code still reports failure.
       const failures: Array<{ file: string; message: string }> = [];
+
+      // First-time setup: build the remote structure from the manifest and
+      // seed it from what is already on disk. Without this the only path was
+      // `cf workspace create` plus one `cf environment create` per environment
+      // by hand, and skipping it made the pull fail with "workspace not found".
+      if (opts.create) {
+        await requirePermission('secrets:write');
+        const client = getClient();
+        let madeWs = 0;
+        let madeEnv = 0;
+        let pushed = 0;
+
+        for (const binding of manifest.bindings) {
+          const scope = {
+            ...(org ? { organisation: org } : {}),
+            workspace: binding.workspace!,
+            environment: binding.environment!,
+          };
+          try {
+            const { createdWorkspace, createdEnvironment } = await ensureScope(client, scope);
+            if (createdWorkspace) madeWs++;
+            if (createdEnvironment) madeEnv++;
+
+            const target = join(root, binding.file);
+            const values = existsSync(target)
+              ? toValueMap(parseEnvContent(readFileSync(target, 'utf-8')))
+              : new Map<string, string>();
+            const { created, updated } = await seedFromValues(client, scope, values);
+            pushed += created + updated;
+
+            const marks = [
+              createdWorkspace ? chalk.green('+workspace') : '',
+              createdEnvironment ? chalk.green('+environment') : '',
+              created > 0 ? chalk.green(`+${created} secret(s)`) : '',
+              updated > 0 ? chalk.blue(`~${updated} secret(s)`) : '',
+            ].filter(Boolean).join(' ');
+            console.log(
+              `  ${chalk.green('✓')} ${binding.file} ${chalk.dim(`-> ${binding.workspace}/${binding.environment}`)}`
+                + (marks ? ` ${marks}` : chalk.dim(' (already set up)')),
+            );
+          } catch (err) {
+            const message = (err as Error).message ?? String(err);
+            failures.push({ file: binding.file, message });
+            console.log(`  ${chalk.red('✗')} ${binding.file} ${chalk.red(message.slice(0, 90))}`);
+          }
+        }
+
+        console.log();
+        output.success(
+          `Created ${madeWs} workspace(s), ${madeEnv} environment(s), pushed ${pushed} secret(s).`,
+        );
+        // Local files are already the source here, so pulling them straight
+        // back would be a no-op at best and a needless reveal at worst.
+        opts.pull = false;
+      }
 
       if (opts.pull !== false) {
         await requirePermission('secrets:read');

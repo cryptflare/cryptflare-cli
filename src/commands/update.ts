@@ -1,9 +1,9 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import ora from 'ora';
 import { spawn } from 'node:child_process';
 
 import { handleError } from '../lib/output.js';
+import * as progress from '../lib/progress.js';
 
 const NPM_PACKAGE = '@cryptflare/cli';
 
@@ -13,18 +13,18 @@ export const updateCommand = new Command('update')
   .action(async (opts) => {
     try {
       const installed = (await import('../version.js')).VERSION;
-      const spinner = ora(`Checking npm for the latest ${NPM_PACKAGE}...`).start();
+      progress.start(`Checking npm for the latest ${NPM_PACKAGE}...`);
 
       const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(NPM_PACKAGE)}/latest`, {
         headers: { accept: 'application/json' },
       });
       if (!res.ok) {
-        spinner.fail(`Could not reach npm: HTTP ${res.status}`);
+        progress.fail(`Could not reach npm: HTTP ${res.status}`);
         process.exit(1);
       }
       const body = (await res.json()) as { version: string };
       const latest = body.version;
-      spinner.stop();
+      progress.stop();
 
       if (latest === installed) {
         console.log(`${chalk.green('✓')} You are on the latest version (${installed}).`);
