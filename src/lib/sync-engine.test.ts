@@ -21,7 +21,7 @@ type RemoteSecret = { value: string; version: number };
 
 /** Minimal stand-in for the parts of the SDK the engine touches. */
 function fakeClient(remote: Map<string, RemoteSecret>) {
-  const calls = { reveals: [] as string[], rotates: [] as string[], batchUpdates: 0, lists: 0 };
+  const calls = { reveals: [] as string[], revealMany: 0, rotates: [] as string[], batchUpdates: 0, lists: 0 };
   const client = {
     secrets: {
       list: () => {
@@ -37,6 +37,20 @@ function fakeClient(remote: Map<string, RemoteSecret>) {
         const hit = remote.get(key);
         if (!hit) throw new Error(`no such secret ${key}`);
         return { key, value: hit.value, version: hit.version };
+      },
+      // Mirrors the real batch endpoint: the engine reaches for this first,
+      // and `calls.revealMany` is what proves it is not looping single reveals.
+      revealMany: async ({ keys }: { keys?: string[] }) => {
+        calls.revealMany++;
+        const wanted = keys ?? [...remote.keys()];
+        const secrets = wanted
+          .filter((k) => remote.has(k))
+          .map((k) => ({ key: k, value: remote.get(k)!.value, version: remote.get(k)!.version }));
+        return {
+          secrets,
+          missing: wanted.filter((k) => !remote.has(k)),
+          encoding: 'utf-8' as const,
+        };
       },
       rotate: async ({ key, value }: { key: string; value: string }) => {
         calls.rotates.push(key);
@@ -146,7 +160,9 @@ describe('planBinding', () => {
 
     const plan = await planBinding(client, project, binding, state);
 
-    expect(calls.reveals).toEqual(['A']);
+    // One batch request, not one per key.
+    expect(calls.revealMany).toBe(1);
+    expect(calls.reveals).toEqual([]);
     expect(plan.actions).toEqual([]);
   });
 
@@ -186,9 +202,11 @@ describe('planBinding', () => {
     const { client, calls } = fakeClient(new Map([['A', { value: 'remote', version: 1 }]]));
     writeEnv('A=local\n');
     const plan = await planBinding(client, project, binding, state);
-    expect(calls.reveals).toEqual(['A']);
+    expect(calls.revealMany).toBe(1);
     await applyPlan(client, plan, state);
-    expect(calls.reveals).toEqual(['A']);
+    // Applying reuses what planning already decrypted: still one request,
+    // and no second audit entry for the same key.
+    expect(calls.revealMany).toBe(1);
   });
 
   it('does not manage multi-line values', async () => {
@@ -310,13 +328,23 @@ describe('applyPlan', () => {
     ]);
     const { client, calls } = fakeClient(remote);
     writeEnv('A=1\nB=2\n');
+    // Establish the merge base first; without this both keys are first
+    // contact on the next pass and the assertion below is meaningless.
     await applyPlan(client, await planBinding(client, project, binding, state), state);
-    calls.reveals.length = 0;
+
+    const revealed: string[][] = [];
+    const origRevealMany = (client.secrets as unknown as { revealMany: (i: { keys?: string[] }) => unknown }).revealMany;
+    (client.secrets as unknown as { revealMany: (i: { keys?: string[] }) => unknown }).revealMany = (input) => {
+      revealed.push(input.keys ?? ['(all)']);
+      return origRevealMany(input);
+    };
 
     remote.set('B', { value: '3', version: 2 });
     await applyPlan(client, await planBinding(client, project, binding, state), state);
 
-    expect(calls.reveals).toEqual(['B']);
+    // Only the changed key is decrypted - batching must not turn into
+    // "fetch everything every pass".
+    expect(revealed).toEqual([['B']]);
   });
 
   it('does not re-add a key the developer deleted locally', async () => {

@@ -29,6 +29,7 @@ import {
   type SyncProject,
 } from '../lib/sync-registry.js';
 import { getStatePath, loadState, saveState } from '../lib/sync-state.js';
+import { revealSecrets } from '../lib/reveal.js';
 import { applyEnvChanges, parseEnvContent, renderEnvFile } from '../lib/env-file.js';
 import { MANIFEST_FILENAME, hasManifest, loadManifest, writeManifest } from '../lib/project-manifest.js';
 
@@ -168,6 +169,7 @@ const initCommand = new Command('init')
   .option('--no-pull', 'Register for sync without pulling files first')
   .option('--no-register', 'Pull files without registering for ongoing sync')
   .option('-p, --project <id>', 'Which registered project to write from, when several share this directory')
+  .option('--id <id>', 'Register under this id instead of the manifest\'s, for a second checkout of the same repo')
   .action(async (pathArg: string, opts) => {
     try {
       const root = resolve(pathArg);
@@ -179,7 +181,7 @@ const initCommand = new Command('init')
       }
 
       const manifest = loadManifest(root);
-      const id = manifest.id ?? basename(root);
+      const id = opts.id ?? manifest.id ?? basename(root);
       const org = manifest.org ?? getOrg();
 
       console.log();
@@ -189,11 +191,18 @@ const initCommand = new Command('init')
       // Pull first, then register. Registering first would make the initial
       // sync pass see empty local files and treat every remote key as new -
       // correct, but it logs a pull of everything rather than a clean adopt.
+      // Collected rather than thrown: a bootstrap that dies on the first
+      // unreachable environment leaves a half-populated clone and no clue
+      // which files are missing. Every binding is attempted, failures are
+      // listed at the end, and the exit code still reports failure.
+      const failures: Array<{ file: string; message: string }> = [];
+
       if (opts.pull !== false) {
         await requirePermission('secrets:read');
         const client = getClient();
 
         for (const binding of manifest.bindings) {
+          try {
           const target = join(root, binding.file);
           const scope = {
             ...(org ? { organisation: org } : {}),
@@ -202,11 +211,7 @@ const initCommand = new Command('init')
             ...(binding.pod ? { podId: binding.pod } : {}),
           };
 
-          const secrets = new Map<string, string>();
-          for await (const secret of await client.secrets.list(scope)) {
-            const revealed = await client.secrets.reveal({ ...scope, key: secret.key });
-            secrets.set(revealed.key, revealed.value);
-          }
+          const secrets = await revealSecrets(client, scope);
 
           mkdirSync(dirname(target), { recursive: true });
           if (existsSync(target)) {
@@ -234,6 +239,14 @@ const initCommand = new Command('init')
             `  ${chalk.green('✓')} ${binding.file} ${chalk.dim(`<- ${binding.workspace}/${binding.environment}`)} ` +
               `${chalk.dim(`(${secrets.size} secret(s))`)}`,
           );
+          } catch (err) {
+            const message = (err as Error).message ?? String(err);
+            failures.push({ file: binding.file, message });
+            console.log(
+              `  ${chalk.red('✗')} ${binding.file} ${chalk.dim(`<- ${binding.workspace}/${binding.environment}`)} ` +
+                `${chalk.red(message.slice(0, 80))}`,
+            );
+          }
         }
       }
 
@@ -253,11 +266,33 @@ const initCommand = new Command('init')
           })),
         };
         const existing = registry.projects.findIndex((p) => p.id === id);
+        if (existing >= 0 && registry.projects[existing]!.path !== root) {
+          // The manifest is committed, so every checkout of the repo carries
+          // the same id. Silently rebinding it would point the sync service at
+          // whichever copy ran `init` last - a second clone, a worktree, a
+          // colleague's path in a shared home - and stop syncing the original
+          // without saying so.
+          throw new Error(
+            `Project "${id}" is already registered at ${registry.projects[existing]!.path}.\n`
+              + `  This directory is ${root}.\n`
+              + `  Re-running init here would repoint the sync service at this copy.\n`
+              + `  Use --id <other-id> to register this checkout separately, `
+              + `or \`cf sync remove ${id}\` first if you meant to move it.`,
+          );
+        }
         if (existing >= 0) registry.projects[existing] = project;
         else registry.projects.push(project);
         saveRegistry(registry);
         console.log();
         output.success(`Registered ${chalk.bold(id)} for ongoing sync.`);
+      }
+
+      if (failures.length > 0) {
+        console.log();
+        output.warn(`${failures.length} of ${manifest.bindings.length} file(s) could not be pulled:`);
+        for (const f of failures) console.error(`    ${f.file}  ${chalk.dim(f.message.slice(0, 100))}`);
+        console.error(chalk.dim(`\n  Re-run ${chalk.cyan('cf sync init')} to retry only what is missing.`));
+        process.exit(1);
       }
 
       console.log();

@@ -38,6 +38,7 @@ import type { CryptFlare } from '@cryptflare/sdk';
 import { applyEnvChanges, parseEnvContent, renderEnvFile, toValueMap } from './env-file.js';
 import { bindingFilePath, bindingKey, type SyncBinding, type SyncProject } from './sync-registry.js';
 import { macMatches, macValue, type BindingState, type SyncState } from './sync-state.js';
+import { revealSecrets } from './reveal.js';
 
 export type SyncAction =
   /** Remote version advanced (or the key is new to this file) - write locally. */
@@ -154,6 +155,7 @@ export async function planBinding(
   const prior: BindingState | undefined = state.bindings[key];
   const actions: SyncAction[] = [];
   const revealed = new Map<string, string>();
+  const firstContact: string[] = [];
 
   if (parsed) {
     for (const [entryKey, entry] of parsed.entries) {
@@ -182,9 +184,9 @@ export async function planBinding(
           actions.push({ type: 'needs-compare', key: secretKey, remoteVersion });
           continue;
         }
-        const value = (await client.secrets.reveal({ ...scope, key: secretKey })).value;
-        revealed.set(secretKey, value);
-        if (value !== localValue) actions.push({ type: 'conflict', key: secretKey, remoteVersion });
+        // Deferred so every first-contact key is fetched in one request
+        // rather than one round trip each.
+        firstContact.push(secretKey);
         continue;
       }
       if (remoteChanged && localChanged) actions.push({ type: 'conflict', key: secretKey, remoteVersion });
@@ -204,6 +206,23 @@ export async function planBinding(
 
     if (priorKey) actions.push({ type: 'skip-remote-deleted', key: secretKey });
     else actions.push({ type: 'skip-new-local', key: secretKey });
+  }
+
+  // Adoption comparison, batched. Registering a project whose files were
+  // already pushed is the common case, and it used to cost one request per
+  // key before anything had even been decided.
+  if (firstContact.length > 0) {
+    const values = await revealSecrets(client, scope, firstContact);
+    for (const secretKey of firstContact) {
+      const value = values.get(secretKey);
+      // A key listed but not returned vanished between the two calls; leave
+      // it for the next pass rather than guessing.
+      if (value === undefined) continue;
+      revealed.set(secretKey, value);
+      if (value !== localValues.get(secretKey)) {
+        actions.push({ type: 'conflict', key: secretKey, remoteVersion: remoteVersions.get(secretKey)! });
+      }
+    }
   }
 
   return { key, project, binding, filePath, creating, actions, remoteVersions, localValues, revealed };
@@ -268,13 +287,21 @@ export async function applyPlan(
 
   // 2. Reveal only the keys that actually need to come down.
   const incoming = new Map<string, string>();
-  for (const action of [...pulls, ...conflicts]) {
-    // Adoption already revealed some of these while planning; do not pay for
-    // the decrypt (or the audit-log entry) twice.
-    const cached = plan.revealed.get(action.key);
-    const value = cached ?? (await client.secrets.reveal({ ...scope, key: action.key })).value;
-    incoming.set(action.key, value);
-    result.pulled.push(action.key);
+  const wanted = [...pulls, ...conflicts].map((a) => a.key);
+  // Adoption already revealed some of these while planning; do not pay for
+  // the decrypt (or the audit-log entry) twice.
+  const needed = wanted.filter((key) => !plan.revealed.has(key));
+  const fetched = needed.length > 0
+    ? await revealSecrets(client, scope, needed)
+    : new Map<string, string>();
+
+  for (const key of wanted) {
+    const value = plan.revealed.get(key) ?? fetched.get(key);
+    // Absent means the key disappeared between planning and applying. Skip it
+    // rather than writing an empty value over a good local one.
+    if (value === undefined) continue;
+    incoming.set(key, value);
+    result.pulled.push(key);
   }
 
   // 3. Write the local file.

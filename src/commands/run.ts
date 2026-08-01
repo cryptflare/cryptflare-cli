@@ -33,18 +33,15 @@ import { Command } from 'commander';
 
 import { getClient } from '../lib/api.js';
 import { resolveContext } from '../lib/resolve.js';
+import { revealSecrets } from '../lib/reveal.js';
 import * as output from '../lib/output.js';
 
 async function fetchEnv(ctx: { org: string; workspace: string; env: string }): Promise<Record<string, string>> {
   const client = getClient();
   const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env };
-  const pairs: Record<string, string> = {};
-  const page = await client.secrets.list(scope);
-  for await (const secret of page) {
-    const revealed = await client.secrets.reveal({ ...scope, key: secret.key });
-    pairs[secret.key] = revealed.value;
-  }
-  return pairs;
+  // One request for the whole environment instead of a list plus one reveal
+  // per key - `cf run` starts a process, so its latency is felt every time.
+  return Object.fromEntries(await revealSecrets(client, scope));
 }
 
 /** Signal names map to 128+n by convention, matching what a shell reports. */

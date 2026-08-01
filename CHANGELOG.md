@@ -1,5 +1,36 @@
 # @cryptflare/cli
 
+## 0.6.0
+
+### Minor Changes
+
+- 580b710: Reveal many secrets in one request instead of one request per key.
+
+  Every consumer looped `secrets.reveal()`, and each of those is a full worker invocation paying auth, org context, RBAC, a quota Durable Object hop and several D1 queries to move a single value. Bootstrapping a ten-file repository cost 69 requests; it now costs 10. `cf pull` over a 23-secret environment goes from 24 requests to 1.
+
+  Adds `POST .../secrets/reveal`, `secrets.revealMany()` in the SDK, and routes `cf pull`, `cf run`, `cf sync init`, `cf sync run`, `cf daemon` and `cf diff --values` through it.
+
+  The rate limit is deliberately unchanged. The server charges one unit per key against the same 30/min bucket a single reveal uses, so batching buys round trips, not budget - otherwise adding the endpoint would have turned a 30/min ceiling into 30 batches/min. Keys travel in the request body rather than the query string so they cannot reach access logs, and one audit row records the whole batch with every key named, because a queue send per key would be a subrequest per secret.
+
+  A CLI running against an API deployed before this endpoint existed falls back to single reveals on a 404; any other error propagates, so a 429 cannot fan out into N requests.
+
+### Patch Changes
+
+- f94e45d: Stop a single failed request from taking down a whole command.
+  - `requirePermission` refreshes the token's scopes from `/auth/whoami`, and a failure there aborted the command. The check is advisory - the server enforces the same rule - so it now falls back to an expired cache, and returns "unknown" when there is none, letting the request proceed to the authoritative check. A 401/403 still fails closed, because a bad credential is an answer rather than an outage. A 503 on `/whoami` was killing entire `cf sync init` bootstraps this way.
+  - `cf sync init` aborted on the first file it could not pull, leaving a half-populated clone and no list of what was missing. Every binding is now attempted, failures are reported together, and the exit code still reflects them.
+  - `cf sync init` upserted the registry by manifest id, so running it in a second checkout silently repointed the sync service at the new path and stopped syncing the original. It now refuses, naming both paths, and takes `--id` to register a second checkout separately.
+
+- d45f466: Stop `cf diff` reporting "in sync" when only the key names match.
+
+  It compared key names and nothing else, so a local file whose every value was stale printed "Local and remote are in sync (keys match)" and exited 0 - the exact check someone runs before a deploy. It now says keys matched and values were not compared, and takes `--values` to actually compare them (one decryption per shared key, reporting which keys differ and never printing a value). `--exit-code` returns 1 on any difference for CI use, leaving the default exit behaviour alone.
+
+  Also warns when a pulled value contains a newline. Those are written escaped as `KEY="a\nb"`, which dotenv and the CLI decode correctly but a POSIX shell does not, so `set -a; . .env` silently produced a literal `\n`. Use `eval "$(cf env -f shell)"`, which emits a shell-correct form.
+
+- Updated dependencies [580b710]
+- Updated dependencies [5104d94]
+  - @cryptflare/sdk@1.1.0
+
 ## 0.5.2
 
 ### Patch Changes

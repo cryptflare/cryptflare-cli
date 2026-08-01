@@ -27,7 +27,12 @@ type WhoamiResponse = {
   permissions: string[];
 };
 
-export async function getEffectivePermissions(): Promise<string[]> {
+/**
+ * `null` means "could not determine" - the refresh failed and there is no
+ * usable cache. Callers must treat that as "proceed and let the server
+ * decide", never as "denied".
+ */
+export async function getEffectivePermissions(): Promise<string[] | null> {
   const token = getToken();
   if (!token) {
     throw new Error('Not authenticated. Run `cf login` first.');
@@ -35,23 +40,38 @@ export async function getEffectivePermissions(): Promise<string[]> {
   const tokenPrefix = token.slice(0, 12);
 
   const cached = getCachedPermissions();
-  if (cached && cached.tokenPrefix === tokenPrefix) {
+  const cacheUsable = cached && cached.tokenPrefix === tokenPrefix;
+  if (cacheUsable) {
     const ageMs = Date.now() - new Date(cached.fetchedAt).getTime();
     if (ageMs >= 0 && ageMs < PERMISSIONS_TTL_MS) {
       return cached.permissions;
     }
   }
 
-  // SDK WhoAmI type is stale (no `permissions` field). Cast through
-  // unknown so we don't lie about the SDK contract here.
-  const res = (await getClient().auth.whoami()) as unknown as WhoamiResponse;
-  const permissions = Array.isArray(res?.permissions) ? res.permissions : [];
-  setCachedPermissions({
-    tokenPrefix,
-    permissions,
-    fetchedAt: new Date().toISOString(),
-  });
-  return permissions;
+  try {
+    // SDK WhoAmI type is stale (no `permissions` field). Cast through
+    // unknown so we don't lie about the SDK contract here.
+    const res = (await getClient().auth.whoami()) as unknown as WhoamiResponse;
+    const permissions = Array.isArray(res?.permissions) ? res.permissions : [];
+    setCachedPermissions({
+      tokenPrefix,
+      permissions,
+      fetchedAt: new Date().toISOString(),
+    });
+    return permissions;
+  } catch (err) {
+    // A bad credential is a real answer: fail closed so the user is told to
+    // log in rather than watching every later call 401.
+    const status = (err as { status?: number }).status;
+    if (status === 401 || status === 403) throw err;
+
+    // Anything else - 5xx, DNS, timeout - is the advisory check being
+    // unavailable, not a denial. Refreshing scopes is a convenience; letting
+    // it take down the command turns a nicety into a hard dependency. A
+    // 503 on /whoami aborted an entire `cf sync init` bootstrap this way.
+    if (cacheUsable) return cached.permissions;
+    return null;
+  }
 }
 
 export class InsufficientPermissionError extends Error {
@@ -75,6 +95,9 @@ export class InsufficientPermissionError extends Error {
  */
 export async function requirePermission(required: string): Promise<void> {
   const granted = await getEffectivePermissions();
+  // Unknown scopes: proceed. The server enforces the same rule and will
+  // reject with an authoritative error if this really is not permitted.
+  if (granted === null) return;
   if (!granted.includes(required)) {
     throw new InsufficientPermissionError(required, granted);
   }
