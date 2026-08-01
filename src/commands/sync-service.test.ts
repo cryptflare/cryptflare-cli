@@ -61,7 +61,12 @@ describe('renderUnit', () => {
     expect(unit).not.toMatch(/Environment=CF_TOKEN/);
   });
 
-  it('uses the given exec path verbatim', () => {
+  // resolve() is platform-specific by design: it turns a relative --exec-path
+  // into the absolute path systemd requires. On Windows that makes
+  // '/opt/cf/bin/cf' into 'D:\\opt\\cf\\bin\\cf', which is correct for
+  // that platform and meaningless for a systemd unit. The command itself
+  // refuses to run anywhere but Linux, so this assertion follows it.
+  it.skipIf(process.platform === 'win32')('uses the given exec path verbatim', () => {
     expect(renderUnit({ interval: 60, pullOnly: false, execPath: '/opt/cf/bin/cf' })).toContain('/opt/cf/bin/cf sync watch');
   });
 });

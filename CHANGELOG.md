@@ -1,5 +1,21 @@
 # @cryptflare/cli
 
+## 0.7.1
+
+### Patch Changes
+
+- 7a2632c: Tell `cf init` and `cf sync init` apart.
+
+  Two commands are called `init`: the account setup wizard, and the one that sets a repository up from its committed `.cryptflare.json`. Running the wrong one gives a clean help screen with no hint you are in the wrong place, so `--create` looks missing when it is simply on the other command.
+
+  `cf init` now says so in its help, its one-line description points at `cf sync init`, and it warns when run in a directory that has a `.cryptflare.json`. The warning is informational rather than a block, since authenticating first is exactly what you need before `cf sync init` can work.
+
+- 7a2632c: Fix `cf update` reporting success while leaving the old version installed.
+
+  The installer was chosen by whichever package manager happened to be on PATH, checking pnpm first. On any machine with pnpm - every machine with a pnpm monorepo - `cf update` ran `pnpm add -g` against a CLI that npm had installed. pnpm wrote into its own global tree, the copy on PATH was never touched, and the command still printed "Updated to x.y.z". The update silently did nothing, every time.
+
+  The package manager is now derived from where the running CLI actually lives, and the reported version is read back off disk afterwards rather than inferred from the installer's exit code. When the two disagree it says so, names the path still holding the old version, and gives the command that will work.
+
 ## 0.7.0
 
 ### Minor Changes

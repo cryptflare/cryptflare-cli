@@ -6,20 +6,50 @@ import { getClient } from '../lib/api.js';
 import { getToken, setOrg, setDefault, getConfigPath } from '../lib/config.js';
 import * as output from '../lib/output.js';
 import * as progress from '../lib/progress.js';
+import { MANIFEST_FILENAME, hasManifest } from '../lib/project-manifest.js';
 
 type Org = { id: string; name: string; plan?: string };
 type Workspace = { id: string; name: string; slug: string };
 type Environment = { id: string; name: string; slug: string };
 
 export const initCommand = new Command('init')
-  .description('Interactive setup wizard - authenticates, picks org/workspace/environment, saves defaults')
+  .description('Account setup wizard - picks org/workspace/environment and saves them as CLI defaults (for a repo, see `cf sync init`)')
   .option('-o, --org <id>', 'Skip the org picker and use this organisation ID')
   .option('-w, --workspace <slug>', 'Skip the workspace picker and use this slug')
   .option('-e, --env <slug>', 'Skip the environment picker and use this slug')
   .option('-y, --yes', 'Accept first match at every step (non-interactive defaults)')
+  .addHelpText(
+    'after',
+    `
+This is the account setup wizard: it picks an organisation, workspace and
+environment and saves them as CLI defaults.
+
+It is NOT the command for setting up a repository. For a project that has a
+committed ${MANIFEST_FILENAME}, use:
+
+  cf sync init            pull every bound file and register for sync
+  cf sync init --create   also create the workspaces and environments it names
+`,
+  )
   .action(async (opts) => {
     try {
       banner();
+
+      // Two commands are called `init`, and the wrong one gives a clean help
+      // screen with no hint you are in the wrong place. Someone lost real time
+      // to exactly that, so say it here rather than only in --help.
+      // Informational, not a block: running the auth wizard inside a project
+      // is perfectly reasonable, and it is what you need before `cf sync init`
+      // can work at all.
+      if (hasManifest(process.cwd())) {
+        output.warn(`This directory has a ${MANIFEST_FILENAME}.`);
+        console.error(
+          chalk.dim('  That file is read by ')
+            + chalk.cyan('cf sync init')
+            + chalk.dim(', which pulls every bound file and registers the project.\n')
+            + chalk.dim('  This wizard only saves org/workspace/environment defaults. Carrying on.\n'),
+        );
+      }
 
       // 1. Auth ------------------------------------------------------------
       if (!getToken()) {

@@ -90,6 +90,9 @@ describe('one file, one owner', () => {
   });
 
   it('rejects two projects binding the same file on disk', () => {
+    // Separator class, not a literal slash: bindingFilePath uses path.join, so
+    // the message reads apps\\blog\\.env on Windows and apps/blog/.env
+    // elsewhere. Asserting one of them fails on the other platform.
     // The shape a real registry drifted into: `peak-blog` and `peak-physique`
     // both owning apps/blog/.env at the same directory, so the file had two
     // merge bases and each pass processed it twice.
@@ -99,7 +102,7 @@ describe('one file, one owner', () => {
         project('peak-blog', '/home/dev/peak', 'apps/blog/.env'),
         project('peak-physique', '/home/dev/peak', 'apps/blog/.env'),
       ],
-    })).toThrow(/both bind .*apps\/blog\/\.env/);
+    })).toThrow(/both bind .*apps[\\/]blog[\\/]\.env/);
   });
 
   it('allows the same relative filename in different repositories', () => {
