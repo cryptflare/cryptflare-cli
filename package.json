@@ -1,6 +1,6 @@
 {
   "name": "@cryptflare/cli",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Command-line interface for CryptFlare. Manage secrets, pods, environments, and tokens from your terminal.",
   "license": "Apache-2.0",
   "author": {
@@ -48,15 +48,17 @@
     "access": "public"
   },
   "dependencies": {
-    "@cryptflare/sdk": "^1.1.0",
+    "@cryptflare/sdk": "^1.2.0",
     "chalk": "^5.6.2",
     "commander": "^14.0.3",
     "conf": "^15.1.0",
+    "cross-spawn": "^7.0.6",
     "open": "^11.0.0",
     "ora": "^9.3.0",
     "prompts": "^2.4.2"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.19.17",
     "@types/prompts": "^2.4.9",
     "@vitest/coverage-v8": "^4.1.5",

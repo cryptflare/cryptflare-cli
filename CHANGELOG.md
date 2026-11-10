@@ -1,5 +1,63 @@
 # @cryptflare/cli
 
+## 0.8.0
+
+### Minor Changes
+
+- 14cd95c: Capture new keys from a local env file, and stop needing `-w`/`-e` inside a project.
+
+  **Capture.** `cf sync` only ever pushed keys that already existed remotely: a key typed into `.env` for the first time was reported and skipped, so getting a new secret into CryptFlare still meant a separate `cf secret set` with the right flags. A binding can now opt in with `"capture"` in `.cryptflare.json`:
+  - `"auto"` creates the key in the bound environment on the next pass.
+  - `"prompt"` asks first when run at a terminal (`cf sync run`), and does nothing unattended.
+  - `"off"` (the default) is the previous behaviour.
+
+  Set it once for the whole manifest or per binding. It is read from the manifest on every pass, so changing it does not need a re-run of `cf sync init`. New keys are validated before anything is sent, so an empty value or a lower-case name is reported rather than half-uploaded.
+
+  **No flags inside a project.** `cf run`, `cf env` and `cf secret list/get/set` read `.cryptflare.json` and use the binding nearest the current directory, so `cf run -- npm start` works in a bound repository with no `-w`, `-e` or `.env` file. `--binding <file>` picks a binding by name. Flags still win when given.
+
+  **`cf secret set`** now does what its description said: it creates the secret, or rotates it when the key exists. `--generate [bytes]` stores a random value without printing it, and `--envs dev,production` writes one value to several environments.
+
+  **`cf env -f powershell`** emits `$env:KEY = '...'` for PowerShell. `-f dotenv` now quotes values that need it instead of printing them raw.
+
+  **Windows.** `cf run` and `cf update` start `.cmd` shims (`npm`, `pnpm`, `vite`, `wrangler`) correctly.
+
+  **Large environments.** Revealing a whole environment is paged. `secrets.revealAll()` (SDK) follows the pages; `secrets.revealMany()` accepts `limit` and `cursor` and returns `nextCursor`. Environments with more than 30 secrets could not be pulled at all before, because the reveal budget was charged per key against a 30-per-minute limit.
+
+  **Batch results.** `secrets.batchCreate`, `batchUpdate` and `batchDelete` return the finished per-item result (`results`, `summary`) instead of a job to poll. `secrets.batchStatus` is deprecated. The CLI now reports any key the server did not write, where it previously assumed success. `batchCreate` and `create` accept `description` and `metadata`.
+
+  **The sync service stops when it is logged out.** A revoked token used to be retried every minute indefinitely. After three passes in which every binding is refused as unauthenticated, `cf sync watch` exits with a message saying to log in again, and the systemd unit no longer restarts it.
+
+  **Side by side files.** With `.env` and `.env.production` bound in one directory, a command with no flags now means the development file (`.env.local`, `.env.development`, `.env`, `.dev.vars`, `.envrc`, in that order). It used to refuse to choose. Production is never picked implicitly: ask for it with `--env` or `--binding`.
+
+  **`cf mcp serve`.** A local MCP server for AI coding agents, using your `cf auth login` session. Its tools generate a secret, store one that is already in an env file, and sync the files. None of them returns a secret value.
+
+  **`cf dynamic`.** `cf dynamic issue <config>` mints a credential from a dynamic secret config. With `--save --prefix NAME` it stores the credential as secrets in the bound environment instead of printing it. `cf dynamic list` and `cf dynamic revoke <lease>` complete the set.
+
+  **Edits are picked up at once.** `cf sync watch` watches the bound files and runs a pass within a second of a save, instead of waiting out a poll interval that backs off to ten minutes. Where the filesystem cannot be watched it says so and keeps polling.
+
+  **Background service on macOS and Windows.** `cf sync install-service` installs a launchd agent on macOS and a logon scheduled task on Windows, alongside the existing systemd unit. `cf sync uninstall-service` removes whichever is installed.
+
+  **New project in one command.** In a repository with env files and no `.cryptflare.json`, `cf sync init` now proposes a manifest instead of failing: one environment per file, named `<app>-<stage>`, capture on for development files. It warns about env files git is tracking or not ignoring. `cf sync init --create --yes` writes it, creates the workspace and environments, and uploads each file.
+
+  **Hands-off for a whole directory.** `cf sync auto ~/code` names a directory once. From then on every git repository under it that has a `.env`, `.dev.vars` or `.envrc` is set up without a command: it gets a manifest and its own workspace, its files are uploaded, and it is kept in sync. A fresh clone that already carries a manifest gets its env files pulled. `cf sync auto <dir> --remove` stops it. With the background service installed there is nothing to run per project.
+
+  **Edits made during a sync pass are no longer lost.** A value changed on disk while a pass was running was recorded as already synced and never uploaded. The pass now keeps its baseline on the value it actually compared, and the file watcher remembers a change that arrives while the loop is busy.
+
+  **`cf login` and `cf logout`.** Both now exist at the top level, as the same commands as `cf auth login` and `cf auth logout`. `cf login` checks a saved key before refusing: an expired or revoked key is replaced without a `cf logout` first, a key that still works is kept unless you pass `--force`, and when the API cannot be reached the key is kept and the message says why. When the sync service stops because its key is refused, the log line names the command to run.
+
+  **The running service follows the registry.** `cf sync watch` read the automatic directories and the registered projects once, at start, so `cf sync auto <dir>` or `cf sync init` needed a service restart. It now re-reads the registry on every pass and is woken when the registry file changes. A directory added while the service runs is set up at once. A service started before anything is registered waits instead of exiting.
+
+  **New env files are picked up.** A repository that was already set up was never looked at again, so a new `apps/worker/.dev.vars` or `.env.production` was not synced until `.cryptflare.json` was edited by hand. `cf sync run` and `cf sync watch` now find env files with no binding, name their environment by the usual rules, create it, and append the binding. Existing bindings are never renamed, removed or rewritten. A file that names a stage other than `dev` is bound with capture `off`, so its keys are reported and not uploaded. This only happens for a manifest with `"autoDiscover": true`, which `cf sync auto` and `cf sync init` write when they generate one. A manifest written by hand does not have it and is never edited. `"ignore": ["path/.env"]` keeps single files out. Conflict sidecars and editor backups are no longer mistaken for env files.
+
+  **Two files, one environment.** Two files of a project bound to the same workspace, environment and pod overwrite each other on every pass. `cf sync` now refuses those files with a message naming them and the environment, syncs the rest, and `cf sync run` and `cf sync init` exit with a non-zero code. `cf sync add` refuses the registration.
+
+  **Plan limits are predictable.** `cf sync init --create` and hands-off setup compare what a repository needs with what the plan has left before creating anything. Files that do not fit are left out in manifest order, not registered, and reported on one line with the plan's limits and where to upgrade. The files that fit are synced. A plan-limit refusal is asked about again once an hour, never on every pass, and that includes the secret limit when capturing new keys. Before, the repository was registered anyway and every pass failed on the environments that were never created.
+
+### Patch Changes
+
+- Updated dependencies [14cd95c]
+  - @cryptflare/sdk@1.2.0
+
 ## 0.7.1
 
 ### Patch Changes

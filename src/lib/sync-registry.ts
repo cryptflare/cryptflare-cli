@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join, resolve, isAbsolute } from 'node:path';
 
+import { readCaptureMode, type CaptureMode } from './capture.js';
 import { getConfigPath } from './config.js';
 
 /** One `.env`-shaped file bound to one remote environment, optionally scoped to a pod. */
@@ -41,6 +42,11 @@ export type SyncBinding = {
    * its own registered project pointing at the same directory.
    */
   workspace?: string;
+  /**
+   * What to do with a key that is in the file but not in CryptFlare yet.
+   * Omitted means `off`: report it and never create it. See `./capture.ts`.
+   */
+  capture?: CaptureMode;
 };
 
 export type SyncProject = {
@@ -64,6 +70,14 @@ export type SyncProject = {
 export type SyncRegistry = {
   version: 1;
   projects: SyncProject[];
+  /**
+   * Directories whose repositories are set up automatically. Any git
+   * repository found under one of these that has env files, and is not
+   * registered yet, is given a manifest, uploaded and registered without
+   * being asked about. Absent or empty means nothing is ever set up on its
+   * own. See `./auto-onboard.ts`.
+   */
+  roots?: string[];
 };
 
 const REGISTRY_VERSION = 1;
@@ -110,11 +124,18 @@ function parseBinding(raw: unknown, path: string): SyncBinding {
   if (workspace !== undefined && (typeof workspace !== 'string' || workspace.trim() === '')) {
     throw new RegistryError(`${path}.workspace must be a non-empty string when present`);
   }
+  let capture: CaptureMode | undefined;
+  try {
+    capture = readCaptureMode(obj['capture'], `${path}.capture`);
+  } catch (err) {
+    throw new RegistryError((err as Error).message);
+  }
   return {
     file,
     environment: assertString(obj['environment'], `${path}.environment`),
     ...(typeof pod === 'string' ? { pod } : {}),
     ...(typeof workspace === 'string' ? { workspace } : {}),
+    ...(capture ? { capture } : {}),
   };
 }
 
@@ -213,7 +234,13 @@ export function parseRegistry(raw: unknown): SyncRegistry {
     }
   }
 
-  return { version: REGISTRY_VERSION, projects };
+  const rootsRaw = obj['roots'];
+  if (rootsRaw !== undefined && (!Array.isArray(rootsRaw) || rootsRaw.some((root) => typeof root !== 'string' || !isAbsolute(root)))) {
+    throw new RegistryError('registry.roots must be an array of absolute directory paths');
+  }
+  const roots = rootsRaw === undefined ? [] : [...new Set((rootsRaw as string[]).map((root) => resolve(root)))];
+
+  return { version: REGISTRY_VERSION, projects, ...(roots.length > 0 ? { roots } : {}) };
 }
 
 export function loadRegistry(path = getRegistryPath()): SyncRegistry {

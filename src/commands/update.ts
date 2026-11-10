@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { spawn } from 'node:child_process';
+// cross-spawn, not node:child_process: on Windows `npm` and `pnpm` are `.cmd`
+// shims, which Node will not start without a shell.
+import spawn from 'cross-spawn';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

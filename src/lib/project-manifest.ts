@@ -20,8 +20,10 @@
  * value. The files it points AT hold the secrets and stay gitignored.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+
+import { readCaptureMode, type CaptureMode } from './capture.js';
 
 /** Conventional filename at the repository root. */
 export const MANIFEST_FILENAME = '.cryptflare.json';
@@ -35,6 +37,11 @@ export type ManifestBinding = {
   environment?: string;
   /** Optional pod (secret folder) within the environment. */
   pod?: string;
+  /**
+   * What to do with a new local key. Falls back to the manifest-level
+   * `capture`, then to `off`. See `./capture.ts`.
+   */
+  capture?: CaptureMode;
 };
 
 export type ProjectManifest = {
@@ -47,6 +54,29 @@ export type ProjectManifest = {
   workspace?: string;
   /** Default environment for bindings that do not name one. */
   environment?: string;
+  /** Default capture policy for bindings that do not set their own. */
+  capture?: CaptureMode;
+  /**
+   * Opt-in to having bindings added automatically.
+   *
+   * `true` means the sync service may append a binding when a new env file
+   * appears in the repository (a new `apps/worker/.dev.vars`, a new
+   * `.env.production`). It only ever appends: an existing binding is never
+   * renamed, removed or rewritten, whoever wrote it.
+   *
+   * It is written by `cf sync auto` and by `cf sync init` when they generate
+   * the manifest. A manifest written by hand does not have it, and absence
+   * means "this file is mine, do not edit it": nothing is ever added. Set it
+   * to `true` to opt a hand-written manifest in, or remove it (or set
+   * `false`) to take a generated one back under manual control.
+   */
+  autoDiscover?: boolean;
+  /**
+   * Env files that must never be bound automatically, as paths relative to
+   * the manifest. Only read when `autoDiscover` is on. This is how to say
+   * "leave this one file alone" without turning discovery off for the rest.
+   */
+  ignore?: string[];
   bindings: ManifestBinding[];
 };
 
@@ -75,6 +105,14 @@ function optionalString(value: unknown, path: string): string | undefined {
   return value;
 }
 
+function readCapture(value: unknown, path: string): CaptureMode | undefined {
+  try {
+    return readCaptureMode(value, path);
+  } catch (err) {
+    throw new ManifestError((err as Error).message);
+  }
+}
+
 export function parseManifest(raw: unknown): ProjectManifest {
   if (typeof raw !== 'object' || raw === null) {
     throw new ManifestError(`${MANIFEST_FILENAME} must contain a JSON object`);
@@ -94,6 +132,7 @@ export function parseManifest(raw: unknown): ProjectManifest {
 
   const defaultWorkspace = optionalString(obj['workspace'], 'workspace');
   const defaultEnvironment = optionalString(obj['environment'], 'environment');
+  const defaultCapture = readCapture(obj['capture'], 'capture');
 
   const bindings = bindingsRaw.map((entry, i) => {
     const at = `bindings[${i}]`;
@@ -121,8 +160,19 @@ export function parseManifest(raw: unknown): ProjectManifest {
     }
 
     const pod = optionalString(b['pod'], `${at}.pod`);
-    return { file, workspace, environment, ...(pod ? { pod } : {}) };
+    const capture = readCapture(b['capture'], `${at}.capture`) ?? defaultCapture;
+    return { file, workspace, environment, ...(pod ? { pod } : {}), ...(capture ? { capture } : {}) };
   });
+
+  const autoDiscover = obj['autoDiscover'];
+  if (autoDiscover !== undefined && typeof autoDiscover !== 'boolean') {
+    throw new ManifestError('"autoDiscover" must be true or false when present');
+  }
+  const ignoreRaw = obj['ignore'];
+  if (ignoreRaw !== undefined && (!Array.isArray(ignoreRaw) || ignoreRaw.some((entry) => typeof entry !== 'string' || entry.trim() === ''))) {
+    throw new ManifestError('"ignore" must be an array of file paths when present');
+  }
+  const ignore = (ignoreRaw as string[] | undefined) ?? [];
 
   const seen = new Set<string>();
   for (const b of bindings) {
@@ -140,6 +190,9 @@ export function parseManifest(raw: unknown): ProjectManifest {
     ...(optionalString(obj['org'], 'org') ? { org: obj['org'] as string } : {}),
     ...(defaultWorkspace ? { workspace: defaultWorkspace } : {}),
     ...(defaultEnvironment ? { environment: defaultEnvironment } : {}),
+    ...(defaultCapture ? { capture: defaultCapture } : {}),
+    ...(autoDiscover !== undefined ? { autoDiscover } : {}),
+    ...(ignore.length > 0 ? { ignore } : {}),
     bindings,
   };
 }
@@ -172,12 +225,16 @@ export function renderManifest(manifest: ProjectManifest): string {
   if (manifest.org) out['org'] = manifest.org;
   if (manifest.workspace) out['workspace'] = manifest.workspace;
   if (manifest.environment) out['environment'] = manifest.environment;
+  if (manifest.capture) out['capture'] = manifest.capture;
+  if (manifest.autoDiscover !== undefined) out['autoDiscover'] = manifest.autoDiscover;
+  if (manifest.ignore && manifest.ignore.length > 0) out['ignore'] = manifest.ignore;
 
   out['bindings'] = manifest.bindings.map((b) => ({
     file: b.file,
     ...(b.workspace && b.workspace !== manifest.workspace ? { workspace: b.workspace } : {}),
     ...(b.environment && b.environment !== manifest.environment ? { environment: b.environment } : {}),
     ...(b.pod ? { pod: b.pod } : {}),
+    ...(b.capture && b.capture !== manifest.capture ? { capture: b.capture } : {}),
   }));
 
   return `${JSON.stringify(out, null, 2)}\n`;
@@ -187,4 +244,49 @@ export function writeManifest(projectRoot: string, manifest: ProjectManifest): s
   const path = manifestPath(projectRoot);
   writeFileSync(path, renderManifest(manifest), 'utf-8');
   return path;
+}
+
+/**
+ * Appends bindings to a manifest on disk, leaving everything already in it
+ * exactly as it was.
+ *
+ * It edits the parsed JSON rather than re-rendering the manifest: rendering
+ * would drop fields this version does not know and rewrite bindings a person
+ * edited. Here the existing entries are passed through untouched and only new
+ * ones are added at the end.
+ *
+ * Refuses (returns `[]`) unless the manifest opts in with `autoDiscover`, and
+ * skips any file that is already bound.
+ *
+ * @returns The bindings that were actually written.
+ */
+export function appendManifestBindings(projectRoot: string, additions: readonly ManifestBinding[]): ManifestBinding[] {
+  if (additions.length === 0) return [];
+  const path = manifestPath(projectRoot);
+  const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+  // Validates the file as it is now, so a manifest broken mid-edit is not
+  // written over.
+  const manifest = parseManifest(raw);
+  if (manifest.autoDiscover !== true) return [];
+
+  const bound = new Set(manifest.bindings.map((binding) => binding.file));
+  const fresh = additions.filter((binding) => !bound.has(binding.file));
+  if (fresh.length === 0) return [];
+
+  const entries = raw['bindings'] as unknown[];
+  for (const binding of fresh) {
+    entries.push({
+      file: binding.file,
+      ...(binding.workspace && binding.workspace !== manifest.workspace ? { workspace: binding.workspace } : {}),
+      ...(binding.environment && binding.environment !== manifest.environment ? { environment: binding.environment } : {}),
+      ...(binding.pod ? { pod: binding.pod } : {}),
+      ...(binding.capture && binding.capture !== manifest.capture ? { capture: binding.capture } : {}),
+    });
+  }
+
+  // Renamed into place so an editor or another `cf` never reads half a file.
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  renameSync(tmp, path);
+  return fresh;
 }

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 
 import { describe, it, expect } from 'vitest';
 
-import { shellQuote } from './run.js';
+import { powershellQuote, shellQuote } from './run.js';
 
 /** Round-trips through a real shell: what does `eval` actually produce? */
 function evalInShell(exported: string): string {
@@ -52,5 +52,21 @@ describe('shellQuote', () => {
     // the value comes back verbatim instead.
     const value = "'; touch /tmp/cf-injection-canary; echo '";
     expect(evalInShell(`export K=${shellQuote(value)}`)).toBe(value);
+  });
+});
+
+describe('powershellQuote', () => {
+  it('wraps a plain value in single quotes', () => {
+    expect(powershellQuote('simple')).toBe("'simple'");
+  });
+
+  it('leaves $ and backticks inert by staying single-quoted', () => {
+    // In a single-quoted PowerShell string neither `$(...)` nor a backtick
+    // escape is interpreted, so they must pass through untouched.
+    expect(powershellQuote('a$(whoami)`n')).toBe("'a$(whoami)`n'");
+  });
+
+  it('doubles an embedded single quote', () => {
+    expect(powershellQuote("it's")).toBe("'it''s'");
   });
 });

@@ -5,13 +5,23 @@
  * so `--dry-run` prints exactly the plan that would have executed rather than a
  * separately-derived approximation of it.
  *
- * ## Push policy: guarded
+ * ## Push policy: guarded, with opt-in capture
  *
- * A key is only pushed when it already exists remotely. A key that appears in
- * the local file for the first time is reported and skipped, never created.
- * The service runs unattended for weeks; the cost of a wrong auto-create is a
- * scratch variable landing in a shared vault where every teammate then pulls
- * it, while the cost of skipping is one log line and a manual `cf push` later.
+ * A changed value is pushed only when its key already exists remotely. What
+ * happens to a key that appears in the local file for the first time is the
+ * binding's capture mode (see `./capture.ts`):
+ *
+ * - `off` (default): reported and skipped, never created. The service runs
+ *   unattended for weeks; a wrong auto-create is a scratch variable landing
+ *   in a shared vault where every teammate then pulls it.
+ * - `prompt`: created only when the caller supplies a way to ask and the
+ *   answer is yes. Unattended, that is the same as `off`.
+ * - `auto`: created. This is what makes "paste the key into .env" the whole
+ *   workflow, and it is turned on per binding for the environments where a
+ *   new line in the file really does mean a new secret.
+ *
+ * A new key is validated against the server's rules before anything is sent,
+ * so an empty value or a lower-case name is reported, not half-uploaded.
  *
  * Deletion is never propagated in either direction. Removing a line from a
  * local file must not delete an org's secret, and a secret deleted server-side
@@ -35,10 +45,12 @@ import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 
 import type { CryptFlare } from '@cryptflare/sdk';
 
+import { DEFAULT_CAPTURE_MODE, type CaptureMode } from './capture.js';
 import { applyEnvChanges, parseEnvContent, renderEnvFile, toValueMap } from './env-file.js';
 import { bindingFilePath, bindingKey, type SyncBinding, type SyncProject } from './sync-registry.js';
 import { macMatches, macValue, type BindingState, type SyncState } from './sync-state.js';
 import { revealSecrets } from './reveal.js';
+import { chunk, validateSecrets } from './secret-validation.js';
 
 export type SyncAction =
   /** Remote version advanced (or the key is new to this file) - write locally. */
@@ -47,8 +59,14 @@ export type SyncAction =
   | { type: 'push'; key: string }
   /** Both sides moved since the last pass. Remote wins; local is preserved. */
   | { type: 'conflict'; key: string; remoteVersion: number }
-  /** New local key. Guarded policy: reported, never auto-created remotely. */
+  /** New local key under capture `auto` - create it remotely. */
+  | { type: 'create'; key: string }
+  /** New local key under capture `prompt` - create it only if approved. */
+  | { type: 'confirm-create'; key: string }
+  /** New local key under capture `off`: reported, never created remotely. */
   | { type: 'skip-new-local'; key: string }
+  /** New local key the server would reject (empty value, bad name). */
+  | { type: 'skip-invalid-local'; key: string; reason: string }
   /** Key removed locally but still remote. Never auto-deletes the secret. */
   | { type: 'skip-local-deleted'; key: string }
   /** Key removed remotely but still local. Never auto-deletes the line. */
@@ -82,6 +100,10 @@ export type BindingPlan = {
 export type ApplyResult = {
   pulled: string[];
   pushed: string[];
+  /** New local keys created remotely this pass. */
+  created: string[];
+  /** Keys the server refused to write, with the reason it gave. */
+  failed: Array<{ key: string; reason: string }>;
   conflicts: string[];
   skipped: SyncAction[];
   /** Path of the sidecar written when conflicts occurred. */
@@ -96,9 +118,9 @@ export type ApplyResult = {
  * `unique(environment_id, key)` - pods are an organisational folder, not a
  * namespace. Passing it to those calls is harmless; they ignore it.
  */
-type Scope = { organisation?: string; workspace: string; environment: string; podId?: string };
+export type Scope = { organisation?: string; workspace: string; environment: string; podId?: string };
 
-function scopeFor(project: SyncProject, binding: SyncBinding): Scope {
+export function scopeFor(project: SyncProject, binding: SyncBinding): Scope {
   // A binding may name its own workspace, which is how one repository maps
   // several apps to several workspaces. The registry guarantees at load time
   // that at least one of the two is set.
@@ -114,8 +136,18 @@ function scopeFor(project: SyncProject, binding: SyncBinding): Scope {
   };
 }
 
+const ACTIONABLE: ReadonlySet<SyncAction['type']> = new Set(['pull', 'push', 'conflict', 'create', 'confirm-create']);
+
 export function countActionable(plan: BindingPlan): number {
-  return plan.actions.filter((a) => a.type === 'pull' || a.type === 'push' || a.type === 'conflict').length;
+  return plan.actions.filter((a) => ACTIONABLE.has(a.type)).length;
+}
+
+/** Decides what a new local key becomes under the binding's capture mode. */
+function planNewLocalKey(key: string, value: string, capture: CaptureMode): SyncAction {
+  if (capture === 'off') return { type: 'skip-new-local', key };
+  const [problem] = validateSecrets(new Map([[key, value]]));
+  if (problem) return { type: 'skip-invalid-local', key, reason: problem.reason };
+  return capture === 'auto' ? { type: 'create', key } : { type: 'confirm-create', key };
 }
 
 /**
@@ -137,9 +169,10 @@ export async function planBinding(
   project: SyncProject,
   binding: SyncBinding,
   state: SyncState,
-  opts: { reveal?: boolean } = {},
+  opts: { reveal?: boolean; capture?: CaptureMode } = {},
 ): Promise<BindingPlan> {
   const reveal = opts.reveal ?? true;
+  const capture = opts.capture ?? binding.capture ?? DEFAULT_CAPTURE_MODE;
   const filePath = bindingFilePath(project, binding);
   const key = bindingKey(project, binding);
   const scope = scopeFor(project, binding);
@@ -205,7 +238,7 @@ export async function planBinding(
     }
 
     if (priorKey) actions.push({ type: 'skip-remote-deleted', key: secretKey });
-    else actions.push({ type: 'skip-new-local', key: secretKey });
+    else actions.push(planNewLocalKey(secretKey, localValue ?? '', capture));
   }
 
   // Adoption comparison, batched. Registering a project whose files were
@@ -228,6 +261,16 @@ export async function planBinding(
   return { key, project, binding, filePath, creating, actions, remoteVersions, localValues, revealed };
 }
 
+export type ApplyOptions = {
+  /** `false` pulls only: no rotations and no creations. */
+  push: boolean;
+  /**
+   * Asked which `confirm-create` keys to create. Omitted when nobody is there
+   * to ask (the background service), in which case none are created.
+   */
+  approveCreate?: (keys: string[]) => Promise<string[]>;
+};
+
 /**
  * Executes a plan and rewrites the merge base.
  *
@@ -241,7 +284,7 @@ export async function applyPlan(
   client: CryptFlare,
   plan: BindingPlan,
   state: SyncState,
-  opts: { push: boolean } = { push: true },
+  opts: ApplyOptions = { push: true },
 ): Promise<ApplyResult> {
   const scope = scopeFor(plan.project, plan.binding);
 
@@ -262,10 +305,13 @@ export async function applyPlan(
   const conflicts = plan.actions.filter((a): a is Extract<SyncAction, { type: 'conflict' }> => a.type === 'conflict');
   const pushes = opts.push ? plan.actions.filter((a) => a.type === 'push') : [];
   const skipped = plan.actions.filter((a) => a.type.startsWith('skip-'));
+  const creates = opts.push ? await resolveCreates(plan, opts, skipped) : [];
 
   const result: ApplyResult = {
     pulled: [],
     pushed: [],
+    created: [],
+    failed: [],
     conflicts: conflicts.map((c) => c.key),
     skipped,
     changed: false,
@@ -328,14 +374,33 @@ export async function applyPlan(
     const only = pushes[0]!;
     await client.secrets.rotate({ ...scope, key: only.key, value: plan.localValues.get(only.key) ?? '' });
     result.pushed.push(only.key);
-  } else if (pushes.length > 1) {
-    await client.secrets.batchUpdate({
-      ...scope,
-      secrets: pushes.map((p) => ({ key: p.key, value: plan.localValues.get(p.key) ?? '' })),
-    });
-    result.pushed.push(...pushes.map((p) => p.key));
+  } else {
+    for (const batch of chunk(pushes)) {
+      const response = await client.secrets.batchUpdate({
+        ...scope,
+        secrets: batch.map((p) => ({ key: p.key, value: plan.localValues.get(p.key) ?? '' })),
+      });
+      const outcome = settle(response, batch.map((p) => p.key), 'updated');
+      result.pushed.push(...outcome.done);
+      result.failed.push(...outcome.failed);
+    }
   }
-  if (pushes.length > 0) result.changed = true;
+
+  // 4b. Create the new local keys capture allowed.
+  for (const batch of chunk(creates)) {
+    const response = await client.secrets.batchCreate({
+      ...scope,
+      secrets: batch.map((key) => ({
+        key,
+        value: plan.localValues.get(key) ?? '',
+        ...(scope.podId ? { podId: scope.podId } : {}),
+      })),
+    });
+    const outcome = settle(response, batch, 'created');
+    result.created.push(...outcome.done);
+    result.failed.push(...outcome.failed);
+  }
+  if (result.pushed.length > 0 || result.created.length > 0) result.changed = true;
 
   // 5. Re-baseline. The local side is always re-read from disk - the writer
   //    may have skipped a multi-line key, so the file is the authority. The
@@ -343,9 +408,71 @@ export async function applyPlan(
   //    pull-only or no-op pass can reuse the versions from planning, which
   //    halves the API calls in the steady state. A concurrent remote write
   //    that lands in that window is picked up by the next pass.
-  await rebaseline(client, plan, state, scope, { relist: result.pushed.length > 0 });
+  await rebaseline(client, plan, state, scope, {
+    relist: result.pushed.length > 0 || result.created.length > 0,
+    written: new Set(incoming.keys()),
+  });
 
   return result;
+}
+
+/**
+ * Which new local keys to create: every `create`, plus the `confirm-create`
+ * keys the caller approved. Unapproved ones are reported as skipped, so the
+ * log says why a key the developer just typed did not go anywhere.
+ */
+async function resolveCreates(
+  plan: BindingPlan,
+  opts: ApplyOptions,
+  skipped: SyncAction[],
+): Promise<string[]> {
+  const automatic = plan.actions.filter((a) => a.type === 'create').map((a) => a.key);
+  const pending = plan.actions.filter((a) => a.type === 'confirm-create').map((a) => a.key);
+  if (pending.length === 0) return automatic;
+
+  const approved = new Set(opts.approveCreate ? await opts.approveCreate(pending) : []);
+  for (const key of pending) {
+    if (!approved.has(key)) skipped.push({ type: 'skip-new-local', key });
+  }
+  return [...automatic, ...pending.filter((key) => approved.has(key))];
+}
+
+type BatchResponse = {
+  status?: string;
+  results?: Array<{ key: string; status: string; reason?: string; error?: string }> | null;
+};
+
+/**
+ * Splits a batch response into the keys that were written and the ones that
+ * were not.
+ *
+ * An API that predates synchronous batches answers with a queued job and no
+ * per-item results. There is nothing to inspect, so every key is taken as
+ * written - which is what the engine always assumed against those servers.
+ * The re-list that follows is what actually establishes the new baseline.
+ */
+function settle(
+  response: BatchResponse,
+  keys: string[],
+  wanted: 'created' | 'updated',
+): { done: string[]; failed: Array<{ key: string; reason: string }> } {
+  const results = response.results;
+  if (!results || results.length === 0) return { done: keys, failed: [] };
+
+  const byKey = new Map(results.map((r) => [r.key, r]));
+  const done: string[] = [];
+  const failed: Array<{ key: string; reason: string }> = [];
+  for (const key of keys) {
+    const item = byKey.get(key);
+    if (!item || item.status === wanted) {
+      done.push(key);
+    } else if (item.reason !== 'already_exists') {
+      // `already_exists` is a race with another writer, not a failure: the
+      // next pass meets the key as first contact and compares the values.
+      failed.push({ key, reason: item.error ?? item.reason ?? item.status });
+    }
+  }
+  return { done, failed };
 }
 
 async function rebaseline(
@@ -353,7 +480,7 @@ async function rebaseline(
   plan: BindingPlan,
   state: SyncState,
   scope: Scope,
-  opts: { relist: boolean },
+  opts: { relist: boolean; written: ReadonlySet<string> },
 ): Promise<void> {
   let finalVersions = plan.remoteVersions;
   if (opts.relist) {
@@ -372,7 +499,15 @@ async function rebaseline(
   for (const [k, version] of finalVersions) {
     const localValue = finalLocal.get(k);
     if (localValue !== undefined) {
-      keys[k] = { remoteVersion: version, localMac: macValue(state.salt, localValue) };
+      // A value that changed on disk while this pass was running was never
+      // compared or pushed. Recording it as the baseline would mark an edit
+      // nobody uploaded as "in sync" and lose it for good, so the baseline
+      // stays on the value this pass actually worked with and the next pass
+      // sees the edit. Keys this pass wrote are different: there the file is
+      // the authority, since the writer may have declined to rewrite one.
+      const planned = plan.localValues.get(k);
+      const editedMeanwhile = !opts.written.has(k) && planned !== undefined && planned !== localValue;
+      keys[k] = { remoteVersion: version, localMac: macValue(state.salt, editedMeanwhile ? planned : localValue) };
       continue;
     }
     // Remote-only. If we have never baselined this key, leave it absent so the

@@ -3,4 +3,4 @@
  * the user-agent header on outbound requests, and `cf update` to compare
  * against the latest published release on npm. Bumped via changesets.
  */
-export const VERSION = '0.7.1';
+export const VERSION = '0.8.0';

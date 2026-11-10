@@ -24,16 +24,57 @@ export type ProvisionResult = {
  * Idempotent: existing workspaces and environments are left untouched, so this
  * is safe to re-run over a partially provisioned project.
  */
+export type ScopeCache = {
+  workspaces?: Set<string>;
+  environments: Map<string, Set<string>>;
+};
+
+/** Fresh cache for one provisioning run. */
+export function newScopeCache(): ScopeCache {
+  return { environments: new Map() };
+}
+
+type SlugList = Array<{ slug: string }> | { data?: Array<{ slug: string }> };
+
+function slugs(list: SlugList): Set<string> {
+  return new Set((Array.isArray(list) ? list : list.data ?? []).map((item) => item.slug));
+}
+
+/**
+ * The workspaces that exist, listed once per run, not once per binding. A
+ * twelve-binding repository was making twenty-four calls to the two heaviest
+ * read endpoints before moving a single secret, which on a loaded API is
+ * twenty-four chances to fail.
+ */
+export async function knownWorkspaces(client: CryptFlare, org: string | undefined, cache: ScopeCache): Promise<Set<string>> {
+  if (!cache.workspaces) {
+    cache.workspaces = slugs((await client.workspaces.list({ ...(org ? { organisation: org } : {}) })) as SlugList);
+  }
+  return cache.workspaces;
+}
+
+/** The environments of a workspace that exists, listed once per run. */
+export async function knownEnvironments(
+  client: CryptFlare,
+  org: string | undefined,
+  workspace: string,
+  cache: ScopeCache,
+): Promise<Set<string>> {
+  let known = cache.environments.get(workspace);
+  if (!known) {
+    known = slugs((await client.environments.list({ ...(org ? { organisation: org } : {}), workspace })) as SlugList);
+    cache.environments.set(workspace, known);
+  }
+  return known;
+}
+
 export async function ensureScope(
   client: CryptFlare,
   scope: Scope,
+  cache: ScopeCache = newScopeCache(),
 ): Promise<{ createdWorkspace: boolean; createdEnvironment: boolean }> {
   const org = scope.organisation;
-
-  const workspaces = (await client.workspaces.list({ ...(org ? { organisation: org } : {}) })) as
-    | Array<{ slug: string }>
-    | { data?: Array<{ slug: string }> };
-  const wsList = Array.isArray(workspaces) ? workspaces : workspaces.data ?? [];
+  const wsList = [...(await knownWorkspaces(client, org, cache))].map((slug) => ({ slug }));
 
   let createdWorkspace = false;
   if (!wsList.some((w) => w.slug === scope.workspace)) {
@@ -46,13 +87,14 @@ export async function ensureScope(
       slug: scope.workspace,
     });
     createdWorkspace = true;
+    // Record it so a later binding in the same run does not re-create or
+    // re-list it, and so a freshly created workspace is known immediately -
+    // D1 reads are eventually consistent, so re-listing could miss it.
+    cache.workspaces!.add(scope.workspace);
+    cache.environments.set(scope.workspace, new Set());
   }
 
-  const environments = (await client.environments.list({
-    ...(org ? { organisation: org } : {}),
-    workspace: scope.workspace,
-  })) as Array<{ slug: string }> | { data?: Array<{ slug: string }> };
-  const envList = Array.isArray(environments) ? environments : environments.data ?? [];
+  const envList = [...(await knownEnvironments(client, org, scope.workspace, cache))].map((slug) => ({ slug }));
 
   let createdEnvironment = false;
   if (!envList.some((e) => e.slug === scope.environment)) {
@@ -63,6 +105,7 @@ export async function ensureScope(
       slug: scope.environment,
     });
     createdEnvironment = true;
+    cache.environments.get(scope.workspace)!.add(scope.environment);
   }
 
   return { createdWorkspace, createdEnvironment };
@@ -98,12 +141,32 @@ export async function seedFromValues(
     else toCreate.push({ key, value });
   }
 
+  const failures: string[] = [];
   for (const batch of chunk(toCreate)) {
-    await client.secrets.batchCreate({ ...scope, secrets: batch });
+    failures.push(...failedItems(await client.secrets.batchCreate({ ...scope, secrets: batch })));
   }
   for (const batch of chunk(toUpdate)) {
-    await client.secrets.batchUpdate({ ...scope, secrets: batch });
+    failures.push(...failedItems(await client.secrets.batchUpdate({ ...scope, secrets: batch })));
+  }
+
+  if (failures.length > 0) {
+    // Seeding reported success on the strength of the request being accepted.
+    // The server now says what happened to each key, so say it too.
+    throw new Error(`${failures.length} secret(s) were not written - ${failures.join('; ')}`);
   }
 
   return { created: toCreate.length, updated: toUpdate.length };
+}
+
+/**
+ * Items a batch did not write, as `KEY: reason`. A key skipped because it
+ * already exists is not a failure here: another writer got there first, and
+ * the next sync pass reconciles the two values.
+ */
+function failedItems(response: {
+  results?: Array<{ key: string; status: string; reason?: string; error?: string }> | null;
+}): string[] {
+  return (response.results ?? [])
+    .filter((item) => item.status === 'error')
+    .map((item) => `${item.key}: ${item.error ?? item.reason ?? 'not written'}`);
 }

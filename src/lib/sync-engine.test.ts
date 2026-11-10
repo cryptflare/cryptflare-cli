@@ -21,7 +21,16 @@ type RemoteSecret = { value: string; version: number };
 
 /** Minimal stand-in for the parts of the SDK the engine touches. */
 function fakeClient(remote: Map<string, RemoteSecret>) {
-  const calls = { reveals: [] as string[], revealMany: 0, rotates: [] as string[], batchUpdates: 0, lists: 0 };
+  const calls = {
+    reveals: [] as string[],
+    revealMany: 0,
+    rotates: [] as string[],
+    batchUpdates: 0,
+    batchCreates: [] as Array<Array<{ key: string; value: string; podId?: string }>>,
+    lists: 0,
+  };
+  /** Keys the fake server refuses to create, to exercise per-item failures. */
+  const rejectCreate = new Set<string>();
   const client = {
     secrets: {
       list: () => {
@@ -66,9 +75,25 @@ function fakeClient(remote: Map<string, RemoteSecret>) {
         }
         return { results: [] };
       },
+      // Mirrors the real endpoint: existing keys are skipped, never
+      // overwritten, and every item reports its own outcome.
+      batchCreate: async ({ secrets }: { secrets: Array<{ key: string; value: string; podId?: string }> }) => {
+        calls.batchCreates.push(secrets);
+        const results = secrets.map(({ key, value }) => {
+          if (rejectCreate.has(key)) {
+            return { key, status: 'error', reason: 'write_failed', error: 'The write did not complete.' };
+          }
+          if (remote.has(key)) {
+            return { key, status: 'skipped', reason: 'already_exists', error: 'Key already exists' };
+          }
+          remote.set(key, { value, version: 1 });
+          return { key, status: 'created', version: 1 };
+        });
+        return { status: 'completed', results };
+      },
     },
   };
-  return { client: client as unknown as CryptFlare, calls };
+  return { client: client as unknown as CryptFlare, calls, rejectCreate };
 }
 
 let dir: string;
@@ -390,5 +415,216 @@ describe('applyPlan', () => {
     expect(second.actions).toEqual([]);
     await applyPlan(client, second, state);
     expect(readEnv()).toBe(before);
+  });
+});
+
+describe('capture', () => {
+  it('leaves a new local key alone when capture is off', async () => {
+    const { client, calls } = fakeClient(new Map());
+    writeEnv('NEW_KEY=value\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'off' });
+    expect(typesOf(plan.actions)).toEqual(['skip-new-local:NEW_KEY']);
+
+    await applyPlan(client, plan, state);
+    expect(calls.batchCreates).toEqual([]);
+  });
+
+  it('defaults to off when no mode is given', async () => {
+    const { client } = fakeClient(new Map());
+    writeEnv('NEW_KEY=value\n');
+
+    const plan = await planBinding(client, project, binding, state);
+    expect(typesOf(plan.actions)).toEqual(['skip-new-local:NEW_KEY']);
+  });
+
+  it('creates a new local key when capture is auto', async () => {
+    const remote = new Map<string, RemoteSecret>();
+    const { client } = fakeClient(remote);
+    writeEnv('NEW_KEY=fresh-value\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'auto' });
+    expect(typesOf(plan.actions)).toEqual(['create:NEW_KEY']);
+
+    const result = await applyPlan(client, plan, state);
+    expect(result.created).toEqual(['NEW_KEY']);
+    expect(result.changed).toBe(true);
+    expect(remote.get('NEW_KEY')).toEqual({ value: 'fresh-value', version: 1 });
+  });
+
+  it('reads the mode from the binding when the caller passes none', async () => {
+    const { client } = fakeClient(new Map());
+    writeEnv('NEW_KEY=value\n');
+
+    const plan = await planBinding(client, project, { ...binding, capture: 'auto' }, state);
+    expect(typesOf(plan.actions)).toEqual(['create:NEW_KEY']);
+  });
+
+  it('is in sync on the pass after a capture', async () => {
+    const { client } = fakeClient(new Map());
+    writeEnv('NEW_KEY=fresh-value\n');
+    await applyPlan(client, await planBinding(client, project, binding, state, { capture: 'auto' }), state);
+
+    const second = await planBinding(client, project, binding, state, { capture: 'auto' });
+    expect(second.actions).toEqual([]);
+  });
+
+  it('places a captured key in the binding pod', async () => {
+    const { client, calls } = fakeClient(new Map());
+    const podBinding: SyncBinding = { ...binding, pod: 'pod_web' };
+    writeEnv('NEW_KEY=value\n');
+
+    await applyPlan(client, await planBinding(client, project, podBinding, state, { capture: 'auto' }), state);
+    expect(calls.batchCreates[0]).toEqual([{ key: 'NEW_KEY', value: 'value', podId: 'pod_web' }]);
+  });
+
+  it('does not send a key the server would reject', async () => {
+    const { client, calls } = fakeClient(new Map());
+    writeEnv('lowercase_key=value\nEMPTY_VALUE=\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'auto' });
+    expect(typesOf(plan.actions)).toEqual(['skip-invalid-local:EMPTY_VALUE', 'skip-invalid-local:lowercase_key']);
+
+    const result = await applyPlan(client, plan, state);
+    expect(calls.batchCreates).toEqual([]);
+    expect(result.skipped.map((a) => a.type)).toEqual(['skip-invalid-local', 'skip-invalid-local']);
+  });
+
+  it('creates nothing on a pull-only pass', async () => {
+    const { client, calls } = fakeClient(new Map());
+    writeEnv('NEW_KEY=value\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'auto' });
+    const result = await applyPlan(client, plan, state, { push: false });
+    expect(calls.batchCreates).toEqual([]);
+    expect(result.created).toEqual([]);
+  });
+
+  it('reports a key the server failed to write and does not count it as created', async () => {
+    const { client, rejectCreate } = fakeClient(new Map());
+    rejectCreate.add('BAD_KEY');
+    writeEnv('BAD_KEY=value\nGOOD_KEY=value\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'auto' });
+    const result = await applyPlan(client, plan, state);
+
+    expect(result.created).toEqual(['GOOD_KEY']);
+    expect(result.failed).toEqual([{ key: 'BAD_KEY', reason: 'The write did not complete.' }]);
+  });
+
+  it('retries a failed capture on the next pass', async () => {
+    const { client, rejectCreate } = fakeClient(new Map());
+    rejectCreate.add('BAD_KEY');
+    writeEnv('BAD_KEY=value\n');
+    await applyPlan(client, await planBinding(client, project, binding, state, { capture: 'auto' }), state);
+
+    rejectCreate.clear();
+    const retry = await planBinding(client, project, binding, state, { capture: 'auto' });
+    expect(typesOf(retry.actions)).toEqual(['create:BAD_KEY']);
+  });
+
+  it('treats a key created remotely in the meantime as a race, not a failure', async () => {
+    const remote = new Map<string, RemoteSecret>();
+    const { client } = fakeClient(remote);
+    writeEnv('NEW_KEY=mine\n');
+    const plan = await planBinding(client, project, binding, state, { capture: 'auto' });
+
+    remote.set('NEW_KEY', { value: 'theirs', version: 1 });
+    const result = await applyPlan(client, plan, state);
+
+    expect(result.created).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(remote.get('NEW_KEY')?.value).toBe('theirs');
+  });
+
+  it('splits a large capture into server-sized batches', async () => {
+    const { client, calls } = fakeClient(new Map());
+    writeEnv(Array.from({ length: 250 }, (_, i) => `KEY_${i}=v${i}`).join('\n') + '\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'auto' });
+    const result = await applyPlan(client, plan, state);
+
+    expect(calls.batchCreates.map((batch) => batch.length)).toEqual([100, 100, 50]);
+    expect(result.created).toHaveLength(250);
+  });
+
+  it('plans a confirmation, not a creation, when capture is prompt', async () => {
+    const { client } = fakeClient(new Map());
+    writeEnv('NEW_KEY=value\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'prompt' });
+    expect(typesOf(plan.actions)).toEqual(['confirm-create:NEW_KEY']);
+  });
+
+  it('creates only the keys that were approved', async () => {
+    const remote = new Map<string, RemoteSecret>();
+    const { client } = fakeClient(remote);
+    writeEnv('KEEP_KEY=a\nSCRATCH_KEY=b\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'prompt' });
+    const result = await applyPlan(client, plan, state, {
+      push: true,
+      approveCreate: async (keys) => keys.filter((key) => key === 'KEEP_KEY'),
+    });
+
+    expect(result.created).toEqual(['KEEP_KEY']);
+    expect(remote.has('SCRATCH_KEY')).toBe(false);
+    expect(result.skipped).toContainEqual({ type: 'skip-new-local', key: 'SCRATCH_KEY' });
+  });
+
+  it('creates nothing under prompt when nobody can be asked', async () => {
+    const { client, calls } = fakeClient(new Map());
+    writeEnv('NEW_KEY=value\n');
+
+    const plan = await planBinding(client, project, binding, state, { capture: 'prompt' });
+    const result = await applyPlan(client, plan, state);
+
+    expect(calls.batchCreates).toEqual([]);
+    expect(result.skipped).toContainEqual({ type: 'skip-new-local', key: 'NEW_KEY' });
+  });
+});
+
+describe('edits made while a pass is running', () => {
+  it('does not record a value edited mid-pass as synced', async () => {
+    const remote = new Map([['A', { value: '1', version: 1 }], ['B', { value: 'b', version: 1 }]]);
+    const { client } = fakeClient(remote);
+    writeEnv('A=1\nB=b\n');
+    await applyPlan(client, await planBinding(client, project, binding, state), state);
+
+    // A pass starts with nothing to do for A...
+    const plan = await planBinding(client, project, binding, state);
+    // ...and A is edited on disk before that pass finishes.
+    writeEnv('A=edited-during-the-pass\nB=b\n');
+    await applyPlan(client, plan, state);
+
+    const next = await planBinding(client, project, binding, state);
+    expect(typesOf(next.actions)).toEqual(['push:A']);
+  });
+
+  it('uploads that edit on the following pass', async () => {
+    const remote = new Map([['A', { value: '1', version: 1 }]]);
+    const { client } = fakeClient(remote);
+    writeEnv('A=1\n');
+    await applyPlan(client, await planBinding(client, project, binding, state), state);
+
+    const plan = await planBinding(client, project, binding, state);
+    writeEnv('A=edited-during-the-pass\n');
+    await applyPlan(client, plan, state);
+    await applyPlan(client, await planBinding(client, project, binding, state), state);
+
+    expect(remote.get('A')).toEqual({ value: 'edited-during-the-pass', version: 2 });
+  });
+
+  it('still treats the file as the authority for keys the pass itself wrote', async () => {
+    const remote = new Map([['A', { value: '1', version: 1 }]]);
+    const { client } = fakeClient(remote);
+    writeEnv('A=1\n');
+    await applyPlan(client, await planBinding(client, project, binding, state), state);
+
+    remote.set('A', { value: '2', version: 2 });
+    await applyPlan(client, await planBinding(client, project, binding, state), state);
+
+    expect(readEnv()).toBe('A=2\n');
+    expect((await planBinding(client, project, binding, state)).actions).toEqual([]);
   });
 });

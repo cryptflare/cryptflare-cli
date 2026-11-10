@@ -13,13 +13,14 @@ type Scope = {
  * Decrypts secrets in as few requests as possible.
  *
  * Every caller here used to loop `secrets.reveal()` once per key. That is one
- * full worker invocation per secret - auth, org context, RBAC, a quota
- * Durable Object hop, several D1 queries - to move one value, so bootstrapping
- * a ten-file repository cost 69 requests. `secrets.revealMany` does the same
- * work in one request per 100 keys.
+ * full request per secret to move one value, so bootstrapping a ten-file
+ * repository cost 69 requests. `secrets.revealMany` does the same work in
+ * one request per 100 keys, and `secrets.revealAll` walks a whole
+ * environment page by page.
  *
- * The rate limit is unchanged: the server charges one unit per key against the
- * same bucket a single reveal uses. This buys round trips, not budget.
+ * The server counts the reveal budget in secrets per minute. When it is
+ * exhausted the SDK waits out `Retry-After` and continues, so a large
+ * bootstrap slows down instead of failing.
  *
  * @param keys Keys to fetch. Omit to fetch every secret in the environment.
  */
@@ -33,14 +34,15 @@ export async function revealSecrets(
   if (keys && keys.length === 0) return out;
 
   try {
-    // Chunked because the endpoint caps a batch at MAX_BATCH_SIZE, the same
-    // ceiling the create/update batches use.
-    const batches = keys ? chunk(keys) : [undefined];
-    for (const batch of batches) {
-      const res = await client.secrets.revealMany({
-        ...scope,
-        ...(batch ? { keys: batch } : {}),
-      });
+    if (!keys) {
+      for (const secret of await client.secrets.revealAll(scope)) out.set(secret.key, secret.value);
+      return out;
+    }
+
+    // Chunked because the endpoint caps named keys at MAX_BATCH_SIZE, the
+    // same ceiling the create/update batches use.
+    for (const batch of chunk(keys)) {
+      const res = await client.secrets.revealMany({ ...scope, keys: batch });
       for (const secret of res.secrets) out.set(secret.key, secret.value);
     }
     return out;

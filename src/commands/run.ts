@@ -27,18 +27,24 @@
  *    verbatim, and a signal death becomes 128+signal as a shell would report it.
  */
 
-import { spawnSync } from 'node:child_process';
+import spawn from 'cross-spawn';
 
 import { Command } from 'commander';
 
 import { getClient } from '../lib/api.js';
-import { resolveContext } from '../lib/resolve.js';
+import { renderEnvFile } from '../lib/env-file.js';
+import { resolveContext, type ResolvedContext } from '../lib/resolve.js';
 import { revealSecrets } from '../lib/reveal.js';
 import * as output from '../lib/output.js';
 
-async function fetchEnv(ctx: { org: string; workspace: string; env: string }): Promise<Record<string, string>> {
+async function fetchEnv(ctx: ResolvedContext): Promise<Record<string, string>> {
   const client = getClient();
-  const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env };
+  const scope = {
+    organisation: ctx.org,
+    workspace: ctx.workspace,
+    environment: ctx.env,
+    ...(ctx.pod ? { podId: ctx.pod } : {}),
+  };
   // One request for the whole environment instead of a list plus one reveal
   // per key - `cf run` starts a process, so its latency is felt every time.
   return Object.fromEntries(await revealSecrets(client, scope));
@@ -56,6 +62,7 @@ export const runCommand = new Command('run')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-e, --env <slug>', 'Environment ID or slug')
   .option('-o, --org <id>', 'Organisation ID')
+  .option('-b, --binding <file>', 'Use the scope of this bound file from .cryptflare.json')
   .option('--override', 'Let secrets take precedence over existing environment variables')
   // Without this, a flag intended for the child (`-v`, `--watch`) is parsed as
   // one of ours and rejected.
@@ -63,9 +70,14 @@ export const runCommand = new Command('run')
   .addHelpText(
     'after',
     `
+Inside a project with a .cryptflare.json the workspace and environment come
+from the binding nearest the current directory, so no flags and no .env file
+are needed.
+
 Examples:
   cf run -- node server.js
   cf run -- npm test
+  cf run -b apps/api/.dev.vars -- wrangler dev
   cf run -w my-app -e production -- ./deploy.sh
 
 The command's exit code is propagated, so this composes with CI and with
@@ -89,12 +101,14 @@ shell && chains.`,
 
       const [command, ...commandArgs] = args;
 
-      // No shell: argv is passed through as a vector, so quoting, spaces and
-      // shell metacharacters are inert.
-      const result = spawnSync(command!, commandArgs, {
+      // No shell on POSIX: argv is passed through as a vector, so quoting,
+      // spaces and shell metacharacters are inert. On Windows most tools on
+      // PATH are `.cmd` shims (npm, pnpm, vite, wrangler), which Node refuses
+      // to start without a shell; cross-spawn runs them through cmd.exe with
+      // every argument escaped, which keeps the same guarantee there.
+      const result = spawn.sync(command!, commandArgs, {
         stdio: 'inherit',
         env: mergedEnv as NodeJS.ProcessEnv,
-        shell: false,
       });
 
       if (result.error) {
@@ -117,6 +131,18 @@ shell && chains.`,
     }
   });
 
+/**
+ * Quotes a value for PowerShell. A single-quoted PowerShell string is
+ * literal - no `$` expansion, no backtick escapes - and a single quote inside
+ * it is written twice. Exported for tests.
+ */
+export function powershellQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Output formats of `cf env`. */
+export const ENV_FORMATS = ['dotenv', 'shell', 'powershell', 'json'] as const;
+
 /** Quotes a value for safe `eval` in a POSIX shell by single-quoting it. Exported for tests. */
 export function shellQuote(value: string): string {
   // A single quote is closed, escaped, and reopened - the only way to embed one
@@ -131,13 +157,15 @@ export const envCommand = new Command('env')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-e, --env <slug>', 'Environment ID or slug')
   .option('-o, --org <id>', 'Organisation ID')
-  .option('-f, --format <format>', 'Output format: shell, dotenv, json', 'dotenv')
+  .option('-b, --binding <file>', 'Use the scope of this bound file from .cryptflare.json')
+  .option('-f, --format <format>', `Output format: ${ENV_FORMATS.join(', ')}`, 'dotenv')
   .addHelpText(
     'after',
     `
 Examples:
-  eval "$(cf env -f shell)"     load secrets into the current shell
-  cf env -f dotenv > .env       write a dotenv file
+  eval "$(cf env -f shell)"                    load secrets into the current shell (bash, zsh)
+  cf env -f powershell | Invoke-Expression     load secrets into the current PowerShell session
+  cf env -f dotenv > .env                      write a dotenv file
   cf env -f json | jq .`,
   )
   .action(async (opts) => {
@@ -152,11 +180,16 @@ Examples:
         case 'json':
           output.json(pairs);
           break;
+        case 'powershell':
+          Object.entries(pairs).forEach(([k, v]) => console.log(`$env:${k} = ${powershellQuote(v)}`));
+          break;
         case 'dotenv':
-          Object.entries(pairs).forEach(([k, v]) => console.log(`${k}=${v}`));
+          // The same writer `cf pull` uses, so a value with spaces, `#` or a
+          // newline is quoted instead of being printed raw and misread.
+          process.stdout.write(renderEnvFile(new Map(Object.entries(pairs))));
           break;
         default:
-          throw new Error(`Unknown format "${opts.format}". Use shell, dotenv, or json.`);
+          throw new Error(`Unknown format "${opts.format}". Use ${ENV_FORMATS.join(', ')}.`);
       }
     } catch (err) {
       output.handleError(err);

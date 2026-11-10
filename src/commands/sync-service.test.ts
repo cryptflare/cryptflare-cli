@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
-import { renderUnit, syncCommand } from './sync-service.js';
+import { renderUnit, syncCommand, watchSignature } from './sync-service.js';
 
 describe('cf sync command surface', () => {
   it('exposes the full lifecycle as subcommands', () => {
     expect(syncCommand.commands.map((c) => c.name()).sort()).toEqual([
       'add',
+      'auto',
       'disable',
       'enable',
       'init',
@@ -14,6 +15,7 @@ describe('cf sync command surface', () => {
       'remove',
       'run',
       'status',
+      'uninstall-service',
       'watch',
     ]);
   });
@@ -68,5 +70,39 @@ describe('renderUnit', () => {
   // refuses to run anywhere but Linux, so this assertion follows it.
   it.skipIf(process.platform === 'win32')('uses the given exec path verbatim', () => {
     expect(renderUnit({ interval: 60, pullOnly: false, execPath: '/opt/cf/bin/cf' })).toContain('/opt/cf/bin/cf sync watch');
+  });
+});
+
+describe('watchSignature', () => {
+  const project = (id: string, files: string[]) => ({
+    id,
+    path: `/code/${id}`,
+    workspace: id,
+    enabled: true,
+    bindings: files.map((file) => ({ file, environment: 'dev' })),
+  });
+
+  it('is stable while the registry says the same thing', () => {
+    expect(watchSignature([project('a', ['.env'])], ['/code'])).toBe(watchSignature([project('a', ['.env'])], ['/code']));
+  });
+
+  it('changes when a directory is added or removed', () => {
+    const base = watchSignature([project('a', ['.env'])], ['/code']);
+    expect(watchSignature([project('a', ['.env'])], ['/code', '/work'])).not.toBe(base);
+    expect(watchSignature([project('a', ['.env'])], [])).not.toBe(base);
+  });
+
+  it('changes when a repository is registered or unregistered', () => {
+    const base = watchSignature([project('a', ['.env'])], []);
+    expect(watchSignature([project('a', ['.env']), project('b', ['.env'])], [])).not.toBe(base);
+    expect(watchSignature([], [])).not.toBe(base);
+  });
+
+  it('changes when a repository gains a bound file', () => {
+    expect(watchSignature([project('a', ['.env', '.env.production'])], [])).not.toBe(watchSignature([project('a', ['.env'])], []));
+  });
+
+  it('does not depend on the order the directories are listed in', () => {
+    expect(watchSignature([], ['/work', '/code'])).toBe(watchSignature([], ['/code', '/work']));
   });
 });

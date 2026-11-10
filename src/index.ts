@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { BRAND } from './_vendored/brand';
-import { authCommand } from './commands/auth.js';
+import { authCommand, loginCommand, logoutCommand } from './commands/auth.js';
 import { secretCommand } from './commands/secret.js';
 import { runCommand, envCommand } from './commands/run.js';
 import { podCommand } from './commands/pod.js';
@@ -23,6 +23,8 @@ import { initCommand } from './commands/init.js';
 import { doctorCommand } from './commands/doctor.js';
 import { buildCompletionCommand } from './commands/completion.js';
 import { importCommand } from './commands/import.js';
+import { mcpCommand } from './commands/mcp.js';
+import { dynamicCommand } from './commands/dynamic.js';
 import { VERSION } from './version.js';
 
 const program = new Command()
@@ -35,6 +37,8 @@ const program = new Command()
 
 // Auth & identity
 program.addCommand(authCommand);
+program.addCommand(loginCommand);
+program.addCommand(logoutCommand);
 program.addCommand(whoamiCommand);
 
 // Secrets management
@@ -56,6 +60,12 @@ program.addCommand(importCommand);
 // Inject & export
 program.addCommand(runCommand);
 program.addCommand(envCommand);
+
+// Dynamic secrets
+program.addCommand(dynamicCommand);
+
+// AI agents
+program.addCommand(mcpCommand);
 
 // Organisation & resources
 program.addCommand(orgCommand);

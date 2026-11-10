@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   MANIFEST_FILENAME,
   ManifestError,
+  appendManifestBindings,
   hasManifest,
   loadManifest,
   parseManifest,
@@ -164,5 +165,87 @@ describe('loadManifest', () => {
     const body = readFileSync(path, 'utf-8');
     expect(body.endsWith('\n')).toBe(true);
     expect(() => JSON.parse(body)).not.toThrow();
+  });
+});
+
+describe('autoDiscover', () => {
+  it('is absent from a manifest that does not state it', () => {
+    expect(parseManifest({ version: 1, workspace: 'w', bindings: [{ file: '.env', environment: 'dev' }] }).autoDiscover).toBeUndefined();
+  });
+
+  it('round-trips, with the ignore list', () => {
+    const manifest = parseManifest({
+      version: 1,
+      workspace: 'w',
+      autoDiscover: true,
+      ignore: ['scratch/.env'],
+      bindings: [{ file: '.env', environment: 'dev' }],
+    });
+    expect(manifest.autoDiscover).toBe(true);
+    expect(manifest.ignore).toEqual(['scratch/.env']);
+    expect(parseManifest(JSON.parse(renderManifest(manifest)))).toEqual(manifest);
+  });
+
+  it('rejects a value that is not a boolean', () => {
+    expect(() => parseManifest({ version: 1, workspace: 'w', autoDiscover: 'yes', bindings: [{ file: '.env', environment: 'dev' }] }))
+      .toThrow(/autoDiscover/);
+  });
+});
+
+describe('appendManifestBindings', () => {
+  const path = () => join(dir, MANIFEST_FILENAME);
+  const write = (body: unknown) => writeFileSync(path(), `${JSON.stringify(body, null, 2)}\n`);
+  const read = () => JSON.parse(readFileSync(path(), 'utf-8')) as { bindings: unknown[] } & Record<string, unknown>;
+
+  it('appends to a generated manifest and leaves every existing entry as it was', () => {
+    const before = {
+      version: 1,
+      workspace: 'shop',
+      capture: 'auto',
+      autoDiscover: true,
+      // A field this version does not know, and a binding a person edited.
+      notes: 'kept',
+      bindings: [
+        { file: '.env', environment: 'my-own-name', capture: 'prompt' },
+        { file: 'apps/api/.dev.vars', environment: 'api-dev-worker' },
+      ],
+    };
+    write(before);
+
+    const written = appendManifestBindings(dir, [
+      { file: '.env.production', workspace: 'shop', environment: 'root-production', capture: 'off' },
+    ]);
+
+    expect(written).toHaveLength(1);
+    const after = read();
+    expect(after['notes']).toBe('kept');
+    expect(after.bindings.slice(0, 2)).toEqual(before.bindings);
+    expect(after.bindings[2]).toEqual({ file: '.env.production', environment: 'root-production', capture: 'off' });
+    expect(() => loadManifest(dir)).not.toThrow();
+  });
+
+  it('does not touch a manifest written by hand', () => {
+    write({ version: 1, workspace: 'shop', bindings: [{ file: '.env', environment: 'dev' }] });
+    const before = readFileSync(path(), 'utf-8');
+
+    expect(appendManifestBindings(dir, [{ file: '.env.production', workspace: 'shop', environment: 'root-production' }])).toEqual([]);
+    expect(readFileSync(path(), 'utf-8')).toBe(before);
+  });
+
+  it('does not touch a manifest that opted out', () => {
+    write({ version: 1, workspace: 'shop', autoDiscover: false, bindings: [{ file: '.env', environment: 'dev' }] });
+    expect(appendManifestBindings(dir, [{ file: 'a/.env', workspace: 'shop', environment: 'a-dev' }])).toEqual([]);
+  });
+
+  it('never adds a second binding for a file that has one', () => {
+    write({ version: 1, workspace: 'shop', autoDiscover: true, bindings: [{ file: '.env', environment: 'mine' }] });
+    expect(appendManifestBindings(dir, [{ file: '.env', workspace: 'shop', environment: 'root-dev' }])).toEqual([]);
+    expect(read().bindings).toEqual([{ file: '.env', environment: 'mine' }]);
+  });
+
+  it('leaves no temporary file behind', () => {
+    write({ version: 1, workspace: 'shop', autoDiscover: true, bindings: [{ file: '.env', environment: 'dev' }] });
+    appendManifestBindings(dir, [{ file: 'a/.env', workspace: 'shop', environment: 'a-dev' }]);
+    expect(readdirSync(dir)).toEqual([MANIFEST_FILENAME]);
   });
 });

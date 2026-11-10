@@ -8,8 +8,10 @@ import { getAnonymousClient, getClient, resetClient, ApiError } from '../lib/api
 import { getToken, setToken, clearToken, setOrg, getConfigPath } from '../lib/config.js';
 import { success, warn, handleError } from '../lib/output.js';
 import * as progress from '../lib/progress.js';
+import { classifyCredentialCheck, decideLogin, LOGIN_COMMAND, type CredentialState } from '../lib/login-state.js';
 
 const DIVIDER = chalk.dim('─'.repeat(48));
+const BASE_URL_LABEL = process.env.CF_API_URL ?? BRAND.urls.api;
 
 type DeviceResponse = {
   deviceCode: string;
@@ -33,24 +35,65 @@ type AuthMeResponse = {
 export const authCommand = new Command('auth')
   .description('Manage authentication');
 
-authCommand
-  .command('login')
-  .description('Authenticate via browser')
-  .action(async () => {
+/** Asks the API whether the saved key still works. */
+async function checkSavedCredential(): Promise<CredentialState> {
+  progress.start('Checking the saved key...');
+  try {
+    await getClient().auth.whoami();
+    return 'valid';
+  } catch (err) {
+    return classifyCredentialCheck(err);
+  } finally {
+    progress.stop();
+  }
+}
+
+/**
+ * Builds the login command. A factory rather than one instance because it is
+ * registered twice (`cf login` and `cf auth login`) and a commander command
+ * can only have one parent.
+ */
+function buildLoginCommand(): Command {
+  return new Command('login')
+    .description('Authenticate via browser')
+    .option('-f, --force', 'Sign in again even though the saved key still works, replacing it')
+    .action(async (opts: { force?: boolean }) => {
     console.log();
     console.log(`  ${chalk.bold(BRAND.name)} CLI`);
     console.log(DIVIDER);
 
     const existing = getToken();
-    if (existing) {
+    const decision = await decideLogin({
+      hasCredential: Boolean(existing),
+      force: Boolean(opts.force),
+      check: checkSavedCredential,
+    });
+
+    if (decision.action === 'refuse' && existing) {
       const masked = existing.slice(0, 12) + '...' + existing.slice(-4);
       console.log();
-      warn(`Already authenticated: ${chalk.dim(masked)}`);
-      console.log();
-      console.log(`  To re-authenticate, run ${chalk.cyan('cf auth logout')} first.`);
+      if (decision.reason === 'valid') {
+        warn(`Already authenticated: ${chalk.dim(masked)}`);
+        console.log();
+        console.log(`  To sign in again and replace it, run ${chalk.cyan(`${LOGIN_COMMAND} --force`)}.`);
+      } else {
+        warn(`A key is saved (${chalk.dim(masked)}) but the API at ${BASE_URL_LABEL} could not be reached to check it.`);
+        console.log();
+        console.log('  Nothing was changed. Try again when you are online,');
+        console.log(`  or run ${chalk.cyan(`${LOGIN_COMMAND} --force`)} to replace the key without checking it.`);
+      }
       console.log(`  To use a different key, set ${chalk.cyan('CF_TOKEN')} env var.`);
       console.log();
       return;
+    }
+
+    if (decision.reason === 'invalid') {
+      console.log();
+      console.log(`  ${chalk.dim('The saved key is no longer valid. Signing in again.')}`);
+    }
+    if (existing && process.env.CF_TOKEN) {
+      console.log();
+      warn('CF_TOKEN is set in this shell and takes priority over the key this saves. Unset it to use the new one.');
     }
 
     // Anonymous on purpose. The device flow is how a token is obtained, so it
@@ -124,20 +167,23 @@ authCommand
         } catch (err) {
           if (err instanceof ApiError && err.code === 'AUTH_PENDING') continue;
           if (err instanceof ApiError && err.code === 'RESOURCE_NOT_FOUND') {
-            progress.fail('Device code expired. Run `cf auth login` again.');
+            progress.fail('Device code expired. Run `cf login` again.');
             process.exit(1);
           }
           throw err;
         }
       }
 
-      progress.fail('Timed out waiting for approval. Run `cf auth login` again.');
+      progress.fail('Timed out waiting for approval. Run `cf login` again.');
       process.exit(1);
     } catch (err) {
       progress.stop();
       handleError(err);
     }
-  });
+    });
+}
+
+authCommand.addCommand(buildLoginCommand());
 
 authCommand
   .command('status')
@@ -153,7 +199,7 @@ authCommand
       console.log();
       console.log(`  ${chalk.dim('Not authenticated')}`);
       console.log();
-      console.log(`  Run ${chalk.cyan('cf auth login')} to get started.`);
+      console.log(`  Run ${chalk.cyan(LOGIN_COMMAND)} to get started.`);
       console.log();
       return;
     }
@@ -193,19 +239,29 @@ authCommand
     }
   });
 
-authCommand
-  .command('logout')
-  .description('Remove saved API key')
-  .action(() => {
-    const token = getToken();
-    if (!token) {
+function buildLogoutCommand(): Command {
+  return new Command('logout')
+    .description('Remove saved API key')
+    .action(() => {
+      const token = getToken();
+      if (!token) {
+        console.log();
+        console.log(chalk.dim('  No saved API key found.'));
+        console.log();
+        return;
+      }
+      clearToken();
+      resetClient();
       console.log();
-      console.log(chalk.dim('  No saved API key found.'));
+      success('API key removed');
       console.log();
-      return;
-    }
-    clearToken();
-    console.log();
-    success('API key removed');
-    console.log();
-  });
+    });
+}
+
+authCommand.addCommand(buildLogoutCommand());
+
+/** `cf login`: the same command as `cf auth login`, at the top level. */
+export const loginCommand = buildLoginCommand();
+
+/** `cf logout`: the same command as `cf auth logout`, at the top level. */
+export const logoutCommand = buildLogoutCommand();

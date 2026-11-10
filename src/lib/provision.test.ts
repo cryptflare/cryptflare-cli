@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import type { CryptFlare } from '@cryptflare/sdk';
 
-import { ensureScope, seedFromValues } from './provision.js';
+import { ensureScope, newScopeCache, seedFromValues } from './provision.js';
 
 const SCOPE = { organisation: 'org_1', workspace: 'ws', environment: 'dev' };
 
@@ -132,5 +132,50 @@ describe('seedFromValues', () => {
     await seedFromValues(client, SCOPE, values);
 
     expect(calls.batchCreate.map((b) => b.length)).toEqual([100, 100, 50]);
+  });
+});
+
+describe('ensureScope caching', () => {
+  it('lists workspaces and environments once per run, not once per binding', async () => {
+    // A twelve-binding repo was making 24 calls to the two heaviest read
+    // endpoints before moving a secret - 24 chances to hit a loaded API.
+    const { client } = fake({ workspaces: ['ws'], environments: ['dev', 'prod', 'preview'] });
+    let wsLists = 0;
+    let envLists = 0;
+    const c = client as unknown as {
+      workspaces: { list: () => Promise<unknown> };
+      environments: { list: () => Promise<unknown> };
+    };
+    const ws = c.workspaces.list;
+    const env = c.environments.list;
+    c.workspaces.list = () => { wsLists++; return ws(); };
+    c.environments.list = () => { envLists++; return env(); };
+
+    const cache = newScopeCache();
+    for (const environment of ['dev', 'prod', 'preview']) {
+      await ensureScope(client, { ...SCOPE, environment }, cache);
+    }
+
+    expect(wsLists).toBe(1);
+    expect(envLists).toBe(1);
+  });
+
+  it('still lists per workspace when bindings span several', async () => {
+    const { client } = fake({ workspaces: ['a', 'b'], environments: ['dev'] });
+    const cache = newScopeCache();
+    await ensureScope(client, { ...SCOPE, workspace: 'a' }, cache);
+    await ensureScope(client, { ...SCOPE, workspace: 'b' }, cache);
+    expect(cache.environments.size).toBe(2);
+  });
+
+  it('remembers a workspace it just created rather than re-listing it', async () => {
+    // D1 reads are eventually consistent, so a re-list could miss a workspace
+    // created moments earlier and try to create it twice.
+    const { client, calls } = fake();
+    const cache = newScopeCache();
+    await ensureScope(client, { ...SCOPE, environment: 'dev' }, cache);
+    await ensureScope(client, { ...SCOPE, environment: 'prod' }, cache);
+    expect(calls.createdWorkspaces).toHaveLength(1);
+    expect(calls.createdEnvironments).toHaveLength(2);
   });
 });
