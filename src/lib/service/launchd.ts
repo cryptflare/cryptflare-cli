@@ -4,19 +4,19 @@
  * login and writes env files with the right owner.
  */
 
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
-import { watchArgs, type ServiceSpec } from './spec.js';
+import { watchArgs, type ServiceSpec } from '@/lib/service/spec'
 
-export const LAUNCHD_LABEL = 'com.cryptflare.sync';
+export const LAUNCHD_LABEL = 'com.cryptflare.sync'
 
 export function launchdPlistPath(home: string = homedir()): string {
-  return join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+  return join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
 }
 
 export function launchdLogPath(home: string = homedir()): string {
-  return join(home, 'Library', 'Logs', 'cryptflare-sync.log');
+  return join(home, 'Library', 'Logs', 'cryptflare-sync.log')
 }
 
 function xmlEscape(value: string): string {
@@ -25,7 +25,34 @@ function xmlEscape(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+    .replace(/'/g, '&apos;')
+}
+
+/** A property-list value. Rendered by {@link renderPlistValue}. */
+type PlistValue =
+  | string
+  | number
+  | boolean
+  | readonly PlistValue[]
+  | { readonly [key: string]: PlistValue }
+
+function renderPlistValue(value: PlistValue, indent: string): string {
+  if (typeof value === 'string') return `${indent}<string>${xmlEscape(value)}</string>`
+  if (typeof value === 'number') return `${indent}<integer>${value}</integer>`
+  if (typeof value === 'boolean') return `${indent}<${value ? 'true' : 'false'}/>`
+  const inner = `${indent}  `
+  if (Array.isArray(value)) {
+    return [
+      `${indent}<array>`,
+      ...value.map((item) => renderPlistValue(item, inner)),
+      `${indent}</array>`,
+    ].join('\n')
+  }
+  const entries = Object.entries(value).flatMap(([key, item]) => [
+    `${inner}<key>${xmlEscape(key)}</key>`,
+    renderPlistValue(item, inner),
+  ])
+  return [`${indent}<dict>`, ...entries, `${indent}</dict>`].join('\n')
 }
 
 /**
@@ -37,42 +64,25 @@ function xmlEscape(value: string): string {
  * logged-out service - once a minute, not once a second.
  */
 export function renderLaunchdPlist(spec: ServiceSpec, home: string = homedir()): string {
-  const args = [spec.nodePath, spec.cliPath, ...watchArgs(spec)]
-    .map((arg) => `    <string>${xmlEscape(arg)}</string>`)
-    .join('\n');
-  const log = xmlEscape(launchdLogPath(home));
+  const log = launchdLogPath(home)
+  const agent: PlistValue = {
+    Label: LAUNCHD_LABEL,
+    ProgramArguments: [spec.nodePath, spec.cliPath, ...watchArgs(spec)],
+    RunAtLoad: true,
+    KeepAlive: { SuccessfulExit: false },
+    ThrottleInterval: 60,
+    ProcessType: 'Background',
+    EnvironmentVariables: { NODE_ENV: 'production' },
+    StandardOutPath: log,
+    StandardErrorPath: log,
+  }
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${LAUNCHD_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-${args}
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
-  <key>ThrottleInterval</key>
-  <integer>60</integer>
-  <key>ProcessType</key>
-  <string>Background</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>NODE_ENV</key>
-    <string>production</string>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>${log}</string>
-  <key>StandardErrorPath</key>
-  <string>${log}</string>
-</dict>
-</plist>
-`;
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    renderPlistValue(agent, ''),
+    '</plist>',
+    '',
+  ].join('\n')
 }

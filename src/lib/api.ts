@@ -1,13 +1,14 @@
-import { ConfigurationError, CryptFlare, CryptFlareError } from '@cryptflare/sdk';
-import type { HttpMethod } from '@cryptflare/sdk';
-import { BRAND } from '../_vendored/brand';
+import { ConfigurationError, CryptFlare, CryptFlareError } from '@cryptflare/sdk'
+import type { HttpMethod } from '@cryptflare/sdk'
+import { BRAND } from '../_vendored/brand'
 
-import * as progress from './progress.js';
-import { getToken } from './config.js';
+import * as progress from '@/lib/progress'
+import { getToken } from '@/lib/config'
+import { errorStatus } from '@/lib/guards'
 
-const BASE_URL = process.env.CF_API_URL ?? BRAND.urls.api;
+const BASE_URL = process.env.CF_API_URL ?? BRAND.urls.api
 
-let cached: CryptFlare | null = null;
+let cached: CryptFlare | null = null
 
 /**
  * Lazily constructs the SDK client from the stored CLI auth token. Cached so
@@ -18,10 +19,10 @@ let cached: CryptFlare | null = null;
  * `handleError` helper prints a uniform "run cf auth login" hint.
  */
 export function getClient(token?: string): CryptFlare {
-  if (cached) return cached;
-  const apiKey = token ?? getToken();
+  if (cached) return cached
+  const apiKey = token ?? getToken()
   if (!apiKey) {
-    throw new ConfigurationError('Not authenticated. Run `cf auth login` first.');
+    throw new ConfigurationError('Not authenticated. Run `cf auth login` first.')
   }
   cached = new CryptFlare({
     apiKey,
@@ -39,18 +40,19 @@ export function getClient(token?: string): CryptFlare {
       // sleeps for up to a minute with no output and no exit - which looks
       // exactly like a hang. Say what is happening and count it down.
       onRetry: ({ delayMs, error }) => {
-        const status = (error as { status?: number }).status;
-        const reason = status === 429
-          ? 'Rate limited by the API, resuming in'
-          : `Request failed (${status ?? 'network'}), retrying in`;
-        const cancel = progress.countdown(reason, delayMs);
+        const status = errorStatus(error)
+        const reason =
+          status === 429
+            ? 'Rate limited by the API, resuming in'
+            : `Request failed (${status ?? 'network'}), retrying in`
+        const cancel = progress.countdown(reason, delayMs)
         // The SDK sleeps for delayMs immediately after this hook, so the timer
         // is cleared just past that point rather than left to run on.
-        setTimeout(cancel, delayMs + 100).unref?.();
+        setTimeout(cancel, delayMs + 100).unref?.()
       },
     },
-  });
-  return cached;
+  })
+  return cached
 }
 
 /**
@@ -65,24 +67,27 @@ export function getClient(token?: string): CryptFlare {
  * Deliberately not cached. Caching it would mean a later `getClient()` call in
  * the same process silently reuses a credential-less client.
  */
+/** Placeholder credential for routes that take no authentication. Not a secret. */
+const ANONYMOUS_CREDENTIAL = 'unauthenticated'
+
 export function getAnonymousClient(): CryptFlare {
   return new CryptFlare({
     // The SDK requires a non-empty apiKey. These routes ignore the
     // Authorization header entirely, so the value is never meaningful.
-    apiKey: 'unauthenticated',
+    apiKey: ANONYMOUS_CREDENTIAL,
     baseUrl: BASE_URL,
     userAgentSuffix: 'cli',
-  });
+  })
 }
 
 /** Test seam - swap the cached client between calls. */
 export function resetClient(): void {
-  cached = null;
+  cached = null
 }
 
 /**
  * Backwards-compat thin wrapper for commands still using the legacy
- * `api(path)` shape. Routes the call through the SDK's public `runner`
+ * `api(path)` shape. Routes the call through the SDK's public `client.request`
  * so retries, idempotency, hooks, and error mapping all match what typed
  * resource calls get. New code should use `getClient()` plus the typed
  * resource methods; this helper exists only to keep migration small.
@@ -94,15 +99,15 @@ export async function api<T>(
   path: string,
   options: { method?: HttpMethod; body?: unknown; token?: string } = {},
 ): Promise<T> {
-  const client = getClient(options.token);
-  return client.runner.send<T>({
+  const client = getClient(options.token)
+  return client.request<T>({
     method: options.method ?? 'GET',
     path,
     ...(options.body !== undefined ? { body: options.body } : {}),
-  });
+  })
 }
 
-export { CryptFlareError };
+export { CryptFlareError }
 
 /**
  * Legacy alias kept so existing `instanceof ApiError` checks compile during
@@ -112,6 +117,5 @@ export { CryptFlareError };
  * still narrows. Delete this export once every command imports the SDK
  * error classes directly.
  */
-export const ApiError = CryptFlareError;
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export type ApiError = CryptFlareError;
+export const ApiError = CryptFlareError
+export type ApiError = CryptFlareError

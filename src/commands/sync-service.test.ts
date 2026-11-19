@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest'
 
-import { renderUnit, syncCommand, watchSignature } from './sync-service.js';
+import { renderUnit, syncCommand, watchSignature } from '@/commands/sync-service'
 
 describe('cf sync command surface', () => {
   it('exposes the full lifecycle as subcommands', () => {
@@ -17,51 +17,51 @@ describe('cf sync command surface', () => {
       'status',
       'uninstall-service',
       'watch',
-    ]);
-  });
-});
+    ])
+  })
+})
 
 describe('renderUnit', () => {
   it('runs `sync watch` with the chosen interval under the calling user', () => {
-    const unit = renderUnit({ interval: 90, pullOnly: false });
-    expect(unit).toContain('sync watch --interval 90');
+    const unit = renderUnit({ interval: 90, pullOnly: false })
+    expect(unit).toContain('sync watch --interval 90')
     // A user unit, never a system one - the service needs the caller's token
     // and writes into the caller's project directories.
-    expect(unit).toContain('WantedBy=default.target');
-    expect(unit).not.toContain('WantedBy=multi-user.target');
-    expect(unit).not.toContain('User=');
-  });
+    expect(unit).toContain('WantedBy=default.target')
+    expect(unit).not.toContain('WantedBy=multi-user.target')
+    expect(unit).not.toContain('User=')
+  })
 
   it('threads --pull-only and --project through to ExecStart', () => {
-    const unit = renderUnit({ interval: 60, pullOnly: true, project: 'app' });
-    expect(unit).toContain('--pull-only');
-    expect(unit).toContain('--project app');
-  });
+    const unit = renderUnit({ interval: 60, pullOnly: true, project: 'app' })
+    expect(unit).toContain('--pull-only')
+    expect(unit).toContain('--project app')
+  })
 
   it('restarts on failure but caps restart storms', () => {
-    const unit = renderUnit({ interval: 60, pullOnly: false });
-    expect(unit).toContain('Restart=always');
-    expect(unit).toMatch(/StartLimitBurst=\d+/);
-  });
+    const unit = renderUnit({ interval: 60, pullOnly: false })
+    expect(unit).toContain('Restart=always')
+    expect(unit).toMatch(/StartLimitBurst=\d+/)
+  })
 
   it('keeps $HOME writable, since writing .env files is the entire job', () => {
-    const unit = renderUnit({ interval: 60, pullOnly: false });
-    expect(unit).toContain('ProtectHome=read-write');
-    expect(unit).toContain('NoNewPrivileges=yes');
+    const unit = renderUnit({ interval: 60, pullOnly: false })
+    expect(unit).toContain('ProtectHome=read-write')
+    expect(unit).toContain('NoNewPrivileges=yes')
     // V8 needs writable-executable pages; asserting it stays absent stops a
     // well-meaning hardening pass from adding it and breaking the service.
-    expect(unit).not.toContain('MemoryDenyWriteExecute=yes');
-  });
+    expect(unit).not.toContain('MemoryDenyWriteExecute=yes')
+  })
 
   it('waits for the network before starting', () => {
-    expect(renderUnit({ interval: 60, pullOnly: false })).toContain('After=network-online.target');
-  });
+    expect(renderUnit({ interval: 60, pullOnly: false })).toContain('After=network-online.target')
+  })
 
   it('sources an optional 0600 env file rather than inlining a token', () => {
-    const unit = renderUnit({ interval: 60, pullOnly: false });
-    expect(unit).toContain('EnvironmentFile=-%h/.config/cryptflare/service.env');
-    expect(unit).not.toMatch(/Environment=CF_TOKEN/);
-  });
+    const unit = renderUnit({ interval: 60, pullOnly: false })
+    expect(unit).toContain('EnvironmentFile=-%h/.config/cryptflare/service.env')
+    expect(unit).not.toMatch(/Environment=CF_TOKEN/)
+  })
 
   // resolve() is platform-specific by design: it turns a relative --exec-path
   // into the absolute path systemd requires. On Windows that makes
@@ -69,9 +69,11 @@ describe('renderUnit', () => {
   // that platform and meaningless for a systemd unit. The command itself
   // refuses to run anywhere but Linux, so this assertion follows it.
   it.skipIf(process.platform === 'win32')('uses the given exec path verbatim', () => {
-    expect(renderUnit({ interval: 60, pullOnly: false, execPath: '/opt/cf/bin/cf' })).toContain('/opt/cf/bin/cf sync watch');
-  });
-});
+    expect(renderUnit({ interval: 60, pullOnly: false, execPath: '/opt/cf/bin/cf' })).toContain(
+      '/opt/cf/bin/cf sync watch',
+    )
+  })
+})
 
 describe('watchSignature', () => {
   const project = (id: string, files: string[]) => ({
@@ -80,29 +82,33 @@ describe('watchSignature', () => {
     workspace: id,
     enabled: true,
     bindings: files.map((file) => ({ file, environment: 'dev' })),
-  });
+  })
 
   it('is stable while the registry says the same thing', () => {
-    expect(watchSignature([project('a', ['.env'])], ['/code'])).toBe(watchSignature([project('a', ['.env'])], ['/code']));
-  });
+    expect(watchSignature([project('a', ['.env'])], ['/code'])).toBe(
+      watchSignature([project('a', ['.env'])], ['/code']),
+    )
+  })
 
   it('changes when a directory is added or removed', () => {
-    const base = watchSignature([project('a', ['.env'])], ['/code']);
-    expect(watchSignature([project('a', ['.env'])], ['/code', '/work'])).not.toBe(base);
-    expect(watchSignature([project('a', ['.env'])], [])).not.toBe(base);
-  });
+    const base = watchSignature([project('a', ['.env'])], ['/code'])
+    expect(watchSignature([project('a', ['.env'])], ['/code', '/work'])).not.toBe(base)
+    expect(watchSignature([project('a', ['.env'])], [])).not.toBe(base)
+  })
 
   it('changes when a repository is registered or unregistered', () => {
-    const base = watchSignature([project('a', ['.env'])], []);
-    expect(watchSignature([project('a', ['.env']), project('b', ['.env'])], [])).not.toBe(base);
-    expect(watchSignature([], [])).not.toBe(base);
-  });
+    const base = watchSignature([project('a', ['.env'])], [])
+    expect(watchSignature([project('a', ['.env']), project('b', ['.env'])], [])).not.toBe(base)
+    expect(watchSignature([], [])).not.toBe(base)
+  })
 
   it('changes when a repository gains a bound file', () => {
-    expect(watchSignature([project('a', ['.env', '.env.production'])], [])).not.toBe(watchSignature([project('a', ['.env'])], []));
-  });
+    expect(watchSignature([project('a', ['.env', '.env.production'])], [])).not.toBe(
+      watchSignature([project('a', ['.env'])], []),
+    )
+  })
 
   it('does not depend on the order the directories are listed in', () => {
-    expect(watchSignature([], ['/work', '/code'])).toBe(watchSignature([], ['/code', '/work']));
-  });
-});
+    expect(watchSignature([], ['/work', '/code'])).toBe(watchSignature([], ['/code', '/work']))
+  })
+})

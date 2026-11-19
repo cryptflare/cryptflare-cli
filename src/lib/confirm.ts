@@ -19,21 +19,22 @@
  * is fine; claiming success while refusing is not.
  */
 
-import chalk from 'chalk';
-import prompts from 'prompts';
+import chalk from 'chalk'
+import prompts from 'prompts'
+import * as output from '@/lib/output'
 
 export type ConfirmOptions = {
   /** What is about to happen, in plain terms. */
-  message: string;
+  message: string
   /** Set by `--yes`. Skips the prompt entirely. */
-  assumeYes?: boolean | undefined;
+  assumeYes?: boolean | undefined
   /**
    * Require the user to type this exact string. Reserved for the genuinely
    * unrecoverable - deleting a workspace and everything in it - where a reflexive
    * "y" is too easy.
    */
-  requireTyped?: string | undefined;
-};
+  requireTyped?: string | undefined
+}
 
 /**
  * Returns only when the action is confirmed. Otherwise it exits: 0 when the
@@ -41,17 +42,21 @@ export type ConfirmOptions = {
  * there was no way to ask.
  */
 export async function confirmDestructive(options: ConfirmOptions): Promise<void> {
-  const { message, assumeYes, requireTyped } = options;
+  const { message, assumeYes, requireTyped } = options
 
-  if (assumeYes) return;
+  if (assumeYes) return
 
   if (!process.stdin.isTTY) {
-    console.error(chalk.yellow('!') + ` ${message}`);
-    console.error(chalk.dim('  Not a terminal, so this cannot be confirmed interactively. Pass --yes to proceed.'));
-    process.exit(1);
+    output.printError(chalk.yellow('!') + ` ${message}`)
+    output.printError(
+      chalk.dim(
+        '  Not a terminal, so this cannot be confirmed interactively. Pass --yes to proceed.',
+      ),
+    )
+    process.exit(1)
   }
 
-  console.log(chalk.yellow('!') + ` ${message}`);
+  output.print(chalk.yellow('!') + ` ${message}`)
 
   if (requireTyped) {
     const { typed } = await prompts(
@@ -61,20 +66,20 @@ export async function confirmDestructive(options: ConfirmOptions): Promise<void>
         message: `Type ${chalk.bold(requireTyped)} to confirm`,
       },
       { onCancel: () => ({ typed: '' }) },
-    );
+    )
     if (typed !== requireTyped) {
-      console.log(chalk.dim('  Cancelled.'));
-      process.exit(0);
+      output.print(chalk.dim('  Cancelled.'))
+      process.exit(0)
     }
-    return;
+    return
   }
 
   const { ok } = await prompts(
     { type: 'confirm', name: 'ok', message: 'Continue?', initial: false },
     { onCancel: () => ({ ok: false }) },
-  );
+  )
   if (!ok) {
-    console.log(chalk.dim('  Cancelled.'));
-    process.exit(0);
+    output.print(chalk.dim('  Cancelled.'))
+    process.exit(0)
   }
 }

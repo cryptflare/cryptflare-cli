@@ -21,7 +21,7 @@
  */
 
 /** Matches the server-side slug constraint. Kept adjacent to the generator. */
-export const SLUG_PATTERN = /^[a-z0-9-]+$/;
+export const SLUG_PATTERN = /^[a-z0-9-]+$/
 
 /**
  * Converts a display name into a valid slug.
@@ -32,16 +32,18 @@ export const SLUG_PATTERN = /^[a-z0-9-]+$/;
  * would reject it with a less obvious message.
  */
 export function toSlug(name: string): string {
-  return name
-    .normalize('NFKD')
-    // Strip combining marks so accented characters fold to their base letter
-    // (Café -> Cafe) instead of being dropped entirely (Caf).
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    // Collapse runs introduced by adjacent separators ("a -- b" -> "a-b").
-    .replace(/-{2,}/g, '-');
+  return (
+    name
+      .normalize('NFKD')
+      // Strip combining marks so accented characters fold to their base letter
+      // (Café -> Cafe) instead of being dropped entirely (Caf).
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      // Collapse runs introduced by adjacent separators ("a -- b" -> "a-b").
+      .replace(/-{2,}/g, '-')
+  )
 }
 
 /**
@@ -57,16 +59,16 @@ export function resolveSlug(name: string, explicit?: string): string {
     if (!SLUG_PATTERN.test(explicit)) {
       throw new Error(
         `Invalid slug "${explicit}". Use lowercase letters, numbers and hyphens only (e.g. "${toSlug(explicit) || 'my-slug'}").`,
-      );
+      )
     }
-    return explicit;
+    return explicit
   }
 
-  const derived = toSlug(name);
+  const derived = toSlug(name)
   if (!derived) {
     throw new Error(
       `Could not derive a slug from "${name}". Pass one explicitly with --slug (lowercase letters, numbers and hyphens).`,
-    );
+    )
   }
-  return derived;
+  return derived
 }

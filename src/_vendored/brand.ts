@@ -1,4 +1,5 @@
-const version = "0.1.0";
+
+const version = "0.1.0"
 const DEV_URLS = {
   website: 'http://localhost:5490',
   app: 'http://localhost:5489',
@@ -7,7 +8,8 @@ const DEV_URLS = {
   status: 'http://localhost:5492',
   console: 'http://localhost:5496',
   assets: 'http://localhost:5495',
-} as const;
+  mcp: 'http://localhost:5497',
+} as const
 
 const PROD_URLS = {
   website: 'https://cryptflare.com',
@@ -17,7 +19,8 @@ const PROD_URLS = {
   status: 'https://status.cryptflare.com',
   console: 'https://console.cryptflare.com',
   assets: 'https://assets.cryptflare.com',
-} as const;
+  mcp: 'https://mcp.cryptflare.com',
+} as const
 
 /**
  * Resolves URLs based on the current hostname.
@@ -32,11 +35,15 @@ const PROD_URLS = {
  * forcing every consumer to widen their libs.
  */
 export function resolveUrls() {
-  const win = (globalThis as { location?: { hostname?: string } }).location;
-  if (!win?.hostname) {
-    return PROD_URLS;
+  const location: unknown = Reflect.get(globalThis, 'location')
+  const hostname: unknown =
+    typeof location === 'object' && location !== null
+      ? Reflect.get(location, 'hostname')
+      : undefined
+  if (typeof hostname !== 'string' || hostname.length === 0) {
+    return PROD_URLS
   }
-  const host = win.hostname;
+  const host = hostname
   if (
     host === 'localhost' ||
     host === '127.0.0.1' ||
@@ -47,9 +54,9 @@ export function resolveUrls() {
     host.startsWith('10.') ||
     /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
   ) {
-    return DEV_URLS;
+    return DEV_URLS
   }
-  return PROD_URLS;
+  return PROD_URLS
 }
 
 export const BRAND = {
@@ -90,6 +97,8 @@ export const BRAND = {
     dpaUrl: '/legal/dpa',
     subprocessorsUrl: '/legal/sub-processors',
     websiteTermsUrl: '/legal/website-terms',
+    /** Parent company website, linked from every footer. */
+    companyUrl: 'https://buungroup.com',
   },
 
   token: {
@@ -101,6 +110,6 @@ export const BRAND = {
   turnstile: {
     siteKey: '0x4AAAAAAC7leJ0z19A2rSMz',
   },
-} as const;
+} as const
 
-export type Brand = typeof BRAND;
+export type Brand = typeof BRAND

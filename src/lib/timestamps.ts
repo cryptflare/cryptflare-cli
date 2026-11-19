@@ -23,7 +23,7 @@
  */
 
 /** Matches `YYYY-MM-DD HH:MM:SS[.sss]` with no `T` and no zone designator. */
-const SQLITE_DATETIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/;
+const SQLITE_DATETIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/
 
 /**
  * Parses an API timestamp into a `Date`, treating zone-less SQLite datetimes
@@ -36,9 +36,9 @@ export function parseApiTimestamp(value: string): Date {
   if (SQLITE_DATETIME.test(value)) {
     // Reformat rather than append 'Z': `2026-07-29 02:51:23Z` is still not
     // valid ISO-8601 and stays implementation-defined.
-    return new Date(`${value.replace(' ', 'T')}Z`);
+    return new Date(`${value.replace(' ', 'T')}Z`)
   }
-  return new Date(value);
+  return new Date(value)
 }
 
 /**
@@ -49,17 +49,17 @@ export function parseApiTimestamp(value: string): Date {
  * reads like a bug.
  */
 export function timeAgo(value: string): string {
-  const parsed = parseApiTimestamp(value);
-  const ms = parsed.getTime();
-  if (Number.isNaN(ms)) return 'unknown';
+  const parsed = parseApiTimestamp(value)
+  const ms = parsed.getTime()
+  if (Number.isNaN(ms)) return 'unknown'
 
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return 'just now';
+  const diff = Date.now() - ms
+  if (diff < 60_000) return 'just now'
 
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
 }

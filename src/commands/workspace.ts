@@ -1,18 +1,16 @@
-import { Command } from 'commander';
-import chalk from 'chalk';
+import { Command } from 'commander'
+import chalk from 'chalk'
 
-import { getClient } from '../lib/api.js';
-import { resolveOrg } from '../lib/resolve.js';
-import { requirePermission } from '../lib/permissions.js';
-import * as output from '../lib/output.js';
-import { confirmDestructive } from '../lib/confirm.js';
-import { resolveSlug } from '../lib/slug.js';
-
-type WorkspaceItem = { id: string; name: string; slug: string; created_at: string };
+import { getClient } from '@/lib/api'
+import { resolveOrg } from '@/lib/resolve'
+import { requirePermission } from '@/lib/permissions'
+import * as output from '@/lib/output'
+import { confirmDestructive } from '@/lib/confirm'
+import { resolveSlug } from '@/lib/slug'
 
 export const workspaceCommand = new Command('workspace')
   .alias('ws')
-  .description('Manage workspaces');
+  .description('Manage workspaces')
 
 workspaceCommand
   .command('list')
@@ -21,15 +19,15 @@ workspaceCommand
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
     try {
-      const org = resolveOrg(opts);
-      const data = await getClient().workspaces.list({ organisation: org }) as WorkspaceItem[];
+      const org = resolveOrg(opts)
+      const data = await getClient().workspaces.list({ organisation: org })
 
-      if (opts.json) return output.json(data);
-      output.table(data.map((w) => ({ name: w.name, slug: w.slug, id: chalk.dim(w.id) })));
+      if (opts.json) return output.json(data)
+      output.table(data.map((w) => ({ name: w.name, slug: w.slug, id: chalk.dim(w.id) })))
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 workspaceCommand
   .command('create')
@@ -40,19 +38,19 @@ workspaceCommand
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
     try {
-      const org = resolveOrg(opts);
+      const org = resolveOrg(opts)
       const data = await getClient().workspaces.create({
         organisation: org,
         name: opts.name,
         slug: resolveSlug(opts.name, opts.slug),
-      }) as { id: string; name: string; slug: string };
+      })
 
-      if (opts.json) return output.json(data);
-      output.success(`Created workspace ${chalk.bold(data.name)} (${data.slug})`);
+      if (opts.json) return output.json(data)
+      output.success(`Created workspace ${chalk.bold(data.name)} (${data.slug})`)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 workspaceCommand
   .command('delete <slug>')
@@ -61,8 +59,8 @@ workspaceCommand
   .option('-y, --yes', 'Skip confirmation')
   .action(async (slug: string, opts) => {
     try {
-      await requirePermission('workspaces:delete');
-      const org = resolveOrg(opts);
+      await requirePermission('workspaces:delete')
+      const org = resolveOrg(opts)
 
       // Typed confirmation, not y/N: this takes every environment, pod and
       // secret in the workspace with it, and there is no undo.
@@ -70,11 +68,11 @@ workspaceCommand
         message: `This will permanently delete workspace ${chalk.bold(slug)} and all its data.`,
         assumeYes: opts.yes,
         requireTyped: slug,
-      });
+      })
 
-      await getClient().workspaces.delete({ organisation: org, workspace: slug });
-      output.success(`Deleted workspace ${chalk.bold(slug)}`);
+      await getClient().workspaces.delete({ organisation: org, workspace: slug })
+      output.success(`Deleted workspace ${chalk.bold(slug)}`)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })

@@ -1,4 +1,5 @@
-import ora, { type Ora } from 'ora';
+import ora, { type Ora } from 'ora'
+import * as output from '@/lib/output'
 
 /**
  * Shared progress indicator.
@@ -12,18 +13,18 @@ import ora, { type Ora } from 'ora';
  *    of lines of escape codes in the log, so there it stays silent and the
  *    command's own output carries the story.
  */
-const isInteractive = Boolean(process.stderr.isTTY);
+const isInteractive = Boolean(process.stderr.isTTY)
 
-let active: Ora | null = null;
+let active: Ora | null = null
 
 /** Starts (or retargets) the spinner. Safe to call when one is already running. */
 export function start(text: string): void {
-  if (!isInteractive) return;
+  if (!isInteractive) return
   if (active) {
-    active.text = text;
-    return;
+    active.text = text
+    return
   }
-  active = ora({ text, stream: process.stderr }).start();
+  active = ora({ text, stream: process.stderr }).start()
 }
 
 /**
@@ -34,20 +35,20 @@ export function start(text: string): void {
  * secrets...". The command owns the message; the hook only covers the gaps.
  */
 export function startIfIdle(text: string): void {
-  if (active) return;
-  start(text);
+  if (active) return
+  start(text)
 }
 
 /** Updates the running spinner's label. No-op when nothing is spinning. */
 export function update(text: string): void {
-  if (active) active.text = text;
+  if (active) active.text = text
 }
 
 /** Stops and clears the spinner, leaving no residue on the line. */
 export function stop(): void {
-  if (!active) return;
-  active.stop();
-  active = null;
+  if (!active) return
+  active.stop()
+  active = null
 }
 
 /**
@@ -57,11 +58,11 @@ export function stop(): void {
  * leaves the terminal with a stuck frame and a hidden cursor.
  */
 export async function withProgress<T>(text: string, fn: () => Promise<T>): Promise<T> {
-  start(text);
+  start(text)
   try {
-    return await fn();
+    return await fn()
   } finally {
-    stop();
+    stop()
   }
 }
 
@@ -77,20 +78,20 @@ export async function withProgress<T>(text: string, fn: () => Promise<T>): Promi
  * Returns a function that cancels the countdown.
  */
 export function countdown(prefix: string, ms: number): () => void {
-  if (!isInteractive) return () => {};
+  if (!isInteractive) return () => {}
 
-  const endsAt = Date.now() + ms;
+  const endsAt = Date.now() + ms
   const render = () => {
-    const left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
-    update(`${prefix} ${left}s`);
-  };
+    const left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000))
+    update(`${prefix} ${left}s`)
+  }
 
-  render();
-  const timer = setInterval(render, 1000);
+  render()
+  const timer = setInterval(render, 1000)
   // Never hold the process open just to animate a spinner.
-  timer.unref?.();
+  timer.unref?.()
 
-  return () => clearInterval(timer);
+  return () => clearInterval(timer)
 }
 
 /**
@@ -107,33 +108,57 @@ export function describeRequest(method: string, path: string): string {
     PUT: 'Saving',
     PATCH: 'Updating',
     DELETE: 'Deleting',
-  };
-  const verb = verbs[method.toUpperCase()] ?? 'Working';
+  }
+  const verb = verbs[method.toUpperCase()] ?? 'Working'
 
   // Last path segment that is not an id, so `.../secrets/DATABASE_URL` reads
   // as "secrets" rather than leaking a key name into the terminal.
-  const segments = path.split('?')[0]!.split('/').filter(Boolean);
-  const known = ['secrets', 'workspaces', 'environments', 'pods', 'tokens', 'organisations',
-    'audit', 'members', 'billing', 'service-tokens', 'reveal', 'batch'];
-  const resource = [...segments].reverse().find((s) => known.includes(s));
+  const segments = (path.split('?')[0] ?? '').split('/').filter(Boolean)
+  const known = [
+    'secrets',
+    'workspaces',
+    'environments',
+    'pods',
+    'tokens',
+    'organisations',
+    'audit',
+    'members',
+    'billing',
+    'service-tokens',
+    'reveal',
+    'batch',
+  ]
+  const resource = [...segments].reverse().find((s) => known.includes(s))
 
-  return resource ? `${verb} ${resource}...` : `${verb}...`;
+  return resource ? `${verb} ${resource}...` : `${verb}...`
 }
 
 /** Stops the spinner and leaves a success line. */
 export function succeed(text: string): void {
-  if (active) { active.succeed(text); active = null; return; }
-  console.error(text);
+  if (active) {
+    active.succeed(text)
+    active = null
+    return
+  }
+  output.printError(text)
 }
 
 /** Stops the spinner and leaves a failure line. */
 export function fail(text: string): void {
-  if (active) { active.fail(text); active = null; return; }
-  console.error(text);
+  if (active) {
+    active.fail(text)
+    active = null
+    return
+  }
+  output.printError(text)
 }
 
 /** Stops the spinner and leaves an informational line. */
 export function info(text: string): void {
-  if (active) { active.info(text); active = null; return; }
-  console.error(text);
+  if (active) {
+    active.info(text)
+    active = null
+    return
+  }
+  output.printError(text)
 }

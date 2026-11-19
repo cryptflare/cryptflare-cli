@@ -27,34 +27,40 @@
  *    verbatim, and a signal death becomes 128+signal as a shell would report it.
  */
 
-import spawn from 'cross-spawn';
+import spawn from 'cross-spawn'
 
-import { Command } from 'commander';
+import { Command } from 'commander'
 
-import { getClient } from '../lib/api.js';
-import { renderEnvFile } from '../lib/env-file.js';
-import { resolveContext, type ResolvedContext } from '../lib/resolve.js';
-import { revealSecrets } from '../lib/reveal.js';
-import * as output from '../lib/output.js';
+import { getClient } from '@/lib/api'
+import { renderEnvFile } from '@/lib/env-file'
+import { resolveContext, type ResolvedContext } from '@/lib/resolve'
+import { revealSecrets } from '@/lib/reveal'
+import * as output from '@/lib/output'
+import { EXIT_CODES } from '@/lib/exit-codes'
+import { errorCode } from '@/lib/guards'
 
 async function fetchEnv(ctx: ResolvedContext): Promise<Record<string, string>> {
-  const client = getClient();
+  const client = getClient()
   const scope = {
     organisation: ctx.org,
     workspace: ctx.workspace,
     environment: ctx.env,
     ...(ctx.pod ? { podId: ctx.pod } : {}),
-  };
+  }
   // One request for the whole environment instead of a list plus one reveal
   // per key - `cf run` starts a process, so its latency is felt every time.
-  return Object.fromEntries(await revealSecrets(client, scope));
+  return Object.fromEntries(await revealSecrets(client, scope))
 }
 
 /** Signal names map to 128+n by convention, matching what a shell reports. */
-const SIGNAL_EXIT_BASE = 128;
+const SIGNAL_EXIT_BASE = EXIT_CODES.SIGNAL_BASE
 const SIGNAL_NUMBERS: Record<string, number> = {
-  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15,
-};
+  SIGHUP: 1,
+  SIGINT: 2,
+  SIGQUIT: 3,
+  SIGKILL: 9,
+  SIGTERM: 15,
+}
 
 export const runCommand = new Command('run')
   .description('Run a command with secrets injected as environment variables')
@@ -86,50 +92,50 @@ shell && chains.`,
   .action(async (args: string[], opts) => {
     try {
       if (!args || args.length === 0) {
-        console.error('No command specified. Usage: cf run -- <command> [args...]');
-        process.exit(1);
+        output.printError('No command specified. Usage: cf run -- <command> [args...]')
+        process.exit(EXIT_CODES.USAGE)
       }
 
-      const ctx = resolveContext(opts);
-      const env = await fetchEnv(ctx);
+      const ctx = resolveContext(opts)
+      const env = await fetchEnv(ctx)
 
       // Default: the ambient environment wins, so a locally exported override
       // is respected. `--override` flips it for the "trust the vault" case.
-      const mergedEnv = opts.override
-        ? { ...process.env, ...env }
-        : { ...env, ...process.env };
+      const mergedEnv = opts.override ? { ...process.env, ...env } : { ...env, ...process.env }
 
-      const [command, ...commandArgs] = args;
+      const [command, ...commandArgs] = args
+      if (command === undefined)
+        output.usageError('Missing command. Usage: cf run -- <command> [args...]')
 
       // No shell on POSIX: argv is passed through as a vector, so quoting,
       // spaces and shell metacharacters are inert. On Windows most tools on
       // PATH are `.cmd` shims (npm, pnpm, vite, wrangler), which Node refuses
       // to start without a shell; cross-spawn runs them through cmd.exe with
       // every argument escaped, which keeps the same guarantee there.
-      const result = spawn.sync(command!, commandArgs, {
+      const result = spawn.sync(command, commandArgs, {
         stdio: 'inherit',
-        env: mergedEnv as NodeJS.ProcessEnv,
-      });
+        env: mergedEnv,
+      })
 
       if (result.error) {
-        const code = (result.error as NodeJS.ErrnoException).code;
+        const code = errorCode(result.error)
         if (code === 'ENOENT') {
-          console.error(`cf run: command not found: ${command}`);
-          process.exit(127); // Conventional "command not found".
+          output.printError(`cf run: command not found: ${command}`)
+          process.exit(EXIT_CODES.COMMAND_NOT_FOUND)
         }
-        throw result.error;
+        throw result.error
       }
 
       if (result.signal) {
-        const n = SIGNAL_NUMBERS[result.signal] ?? 0;
-        process.exit(SIGNAL_EXIT_BASE + n);
+        const n = SIGNAL_NUMBERS[result.signal] ?? 0
+        process.exit(SIGNAL_EXIT_BASE + n)
       }
 
-      process.exit(result.status ?? 0);
+      process.exit(result.status ?? 0)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 /**
  * Quotes a value for PowerShell. A single-quoted PowerShell string is
@@ -137,11 +143,11 @@ shell && chains.`,
  * it is written twice. Exported for tests.
  */
 export function powershellQuote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 /** Output formats of `cf env`. */
-export const ENV_FORMATS = ['dotenv', 'shell', 'powershell', 'json'] as const;
+export const ENV_FORMATS = ['dotenv', 'shell', 'powershell', 'json'] as const
 
 /** Quotes a value for safe `eval` in a POSIX shell by single-quoting it. Exported for tests. */
 export function shellQuote(value: string): string {
@@ -149,7 +155,7 @@ export function shellQuote(value: string): string {
   // inside a single-quoted string. The previous double-quoted form left `$`,
   // backticks and `\` live, so a secret containing `$(...)` would execute when
   // the output was eval'd.
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 export const envCommand = new Command('env')
@@ -170,28 +176,30 @@ Examples:
   )
   .action(async (opts) => {
     try {
-      const ctx = resolveContext(opts);
-      const pairs = await fetchEnv(ctx);
+      const ctx = resolveContext(opts)
+      const pairs = await fetchEnv(ctx)
 
       switch (opts.format) {
         case 'shell':
-          Object.entries(pairs).forEach(([k, v]) => console.log(`export ${k}=${shellQuote(v)}`));
-          break;
+          Object.entries(pairs).forEach(([k, v]) => output.print(`export ${k}=${shellQuote(v)}`))
+          break
         case 'json':
-          output.json(pairs);
-          break;
+          output.json(pairs)
+          break
         case 'powershell':
-          Object.entries(pairs).forEach(([k, v]) => console.log(`$env:${k} = ${powershellQuote(v)}`));
-          break;
+          Object.entries(pairs).forEach(([k, v]) =>
+            output.print(`$env:${k} = ${powershellQuote(v)}`),
+          )
+          break
         case 'dotenv':
           // The same writer `cf pull` uses, so a value with spaces, `#` or a
           // newline is quoted instead of being printed raw and misread.
-          process.stdout.write(renderEnvFile(new Map(Object.entries(pairs))));
-          break;
+          process.stdout.write(renderEnvFile(new Map(Object.entries(pairs))))
+          break
         default:
-          throw new Error(`Unknown format "${opts.format}". Use ${ENV_FORMATS.join(', ')}.`);
+          throw new Error(`Unknown format "${opts.format}". Use ${ENV_FORMATS.join(', ')}.`)
       }
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })

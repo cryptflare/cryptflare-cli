@@ -1,181 +1,198 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest'
 
-import type { CryptFlare } from '@cryptflare/sdk';
+import type { CryptFlare } from '@cryptflare/sdk'
 
-import { ensureScope, newScopeCache, seedFromValues } from './provision.js';
+import { ensureScope, newScopeCache, seedFromValues } from '@/lib/provision'
 
-const SCOPE = { organisation: 'org_1', workspace: 'ws', environment: 'dev' };
+const SCOPE = { organisation: 'org_1', workspace: 'ws', environment: 'dev' }
 
 function fake(opts: { workspaces?: string[]; environments?: string[]; secrets?: string[] } = {}) {
   const state = {
     workspaces: [...(opts.workspaces ?? [])],
     environments: [...(opts.environments ?? [])],
     secrets: [...(opts.secrets ?? [])],
-  };
+  }
   const calls = {
     createdWorkspaces: [] as unknown[],
     createdEnvironments: [] as unknown[],
     batchCreate: [] as string[][],
     batchUpdate: [] as string[][],
-  };
+  }
   const client = {
     workspaces: {
       list: async () => state.workspaces.map((slug) => ({ slug })),
       create: async (input: { slug: string }) => {
-        calls.createdWorkspaces.push(input);
-        state.workspaces.push(input.slug);
-        return {};
+        calls.createdWorkspaces.push(input)
+        state.workspaces.push(input.slug)
+        return {}
       },
     },
     environments: {
       list: async () => state.environments.map((slug) => ({ slug })),
       create: async (input: { slug: string }) => {
-        calls.createdEnvironments.push(input);
-        state.environments.push(input.slug);
-        return {};
+        calls.createdEnvironments.push(input)
+        state.environments.push(input.slug)
+        return {}
       },
     },
     secrets: {
       list: () => ({
         async *[Symbol.asyncIterator]() {
-          for (const key of state.secrets) yield { key, version: 1 };
+          for (const key of state.secrets) yield { key, version: 1 }
         },
       }),
       batchCreate: async ({ secrets }: { secrets: Array<{ key: string }> }) => {
-        calls.batchCreate.push(secrets.map((s) => s.key));
-        return { results: [] };
+        calls.batchCreate.push(secrets.map((s) => s.key))
+        return { results: [] }
       },
       batchUpdate: async ({ secrets }: { secrets: Array<{ key: string }> }) => {
-        calls.batchUpdate.push(secrets.map((s) => s.key));
-        return { results: [] };
+        calls.batchUpdate.push(secrets.map((s) => s.key))
+        return { results: [] }
       },
     },
-  };
-  return { client: client as unknown as CryptFlare, calls, state };
+  }
+  return { client: client as unknown as CryptFlare, calls, state }
 }
 
 describe('ensureScope', () => {
   it('creates a missing workspace and environment', async () => {
-    const { client, calls } = fake();
+    const { client, calls } = fake()
 
-    const res = await ensureScope(client, SCOPE);
+    const res = await ensureScope(client, SCOPE)
 
-    expect(res).toEqual({ createdWorkspace: true, createdEnvironment: true });
+    expect(res).toEqual({ createdWorkspace: true, createdEnvironment: true })
     // Slug and name match the manifest, so the dashboard shows what the
     // manifest says rather than a prettier invented name.
-    expect(calls.createdWorkspaces).toEqual([{ organisation: 'org_1', name: 'ws', slug: 'ws' }]);
+    expect(calls.createdWorkspaces).toEqual([{ organisation: 'org_1', name: 'ws', slug: 'ws' }])
     expect(calls.createdEnvironments).toEqual([
       { organisation: 'org_1', workspace: 'ws', name: 'dev', slug: 'dev' },
-    ]);
-  });
+    ])
+  })
 
   it('is idempotent when both already exist', async () => {
     // Safe to re-run over a half-provisioned project.
-    const { client, calls } = fake({ workspaces: ['ws'], environments: ['dev'] });
+    const { client, calls } = fake({ workspaces: ['ws'], environments: ['dev'] })
 
     expect(await ensureScope(client, SCOPE)).toEqual({
       createdWorkspace: false,
       createdEnvironment: false,
-    });
-    expect(calls.createdWorkspaces).toEqual([]);
-    expect(calls.createdEnvironments).toEqual([]);
-  });
+    })
+    expect(calls.createdWorkspaces).toEqual([])
+    expect(calls.createdEnvironments).toEqual([])
+  })
 
   it('adds only the missing environment to an existing workspace', async () => {
-    const { client, calls } = fake({ workspaces: ['ws'], environments: ['prod'] });
+    const { client, calls } = fake({ workspaces: ['ws'], environments: ['prod'] })
 
-    const res = await ensureScope(client, SCOPE);
+    const res = await ensureScope(client, SCOPE)
 
-    expect(res).toEqual({ createdWorkspace: false, createdEnvironment: true });
-    expect(calls.createdWorkspaces).toEqual([]);
-    expect(calls.createdEnvironments).toHaveLength(1);
-  });
-});
+    expect(res).toEqual({ createdWorkspace: false, createdEnvironment: true })
+    expect(calls.createdWorkspaces).toEqual([])
+    expect(calls.createdEnvironments).toHaveLength(1)
+  })
+})
 
 describe('seedFromValues', () => {
   it('splits new keys from existing ones', async () => {
-    const { client, calls } = fake({ secrets: ['EXISTING'] });
+    const { client, calls } = fake({ secrets: ['EXISTING'] })
 
-    const res = await seedFromValues(client, SCOPE, new Map([
-      ['EXISTING', 'v2'],
-      ['BRAND_NEW', 'v1'],
-    ]));
+    const res = await seedFromValues(
+      client,
+      SCOPE,
+      new Map([
+        ['EXISTING', 'v2'],
+        ['BRAND_NEW', 'v1'],
+      ]),
+    )
 
-    expect(res).toEqual({ created: 1, updated: 1 });
-    expect(calls.batchCreate).toEqual([['BRAND_NEW']]);
-    expect(calls.batchUpdate).toEqual([['EXISTING']]);
-  });
+    expect(res).toEqual({ created: 1, updated: 1 })
+    expect(calls.batchCreate).toEqual([['BRAND_NEW']])
+    expect(calls.batchUpdate).toEqual([['EXISTING']])
+  })
 
   it('validates everything before sending anything', async () => {
     // A rejection partway through would leave the environment half-written
     // with no way to tell which keys had landed.
-    const { client, calls } = fake();
+    const { client, calls } = fake()
 
     await expect(
-      seedFromValues(client, SCOPE, new Map([['GOOD', 'v'], ['bad_key', 'v']])),
-    ).rejects.toThrow(/nothing pushed/);
+      seedFromValues(
+        client,
+        SCOPE,
+        new Map([
+          ['GOOD', 'v'],
+          ['bad_key', 'v'],
+        ]),
+      ),
+    ).rejects.toThrow(/nothing pushed/)
 
-    expect(calls.batchCreate).toEqual([]);
-    expect(calls.batchUpdate).toEqual([]);
-  });
+    expect(calls.batchCreate).toEqual([])
+    expect(calls.batchUpdate).toEqual([])
+  })
 
   it('sends nothing for an empty file', async () => {
-    const { client, calls } = fake();
-    expect(await seedFromValues(client, SCOPE, new Map())).toEqual({ created: 0, updated: 0 });
-    expect(calls.batchCreate).toEqual([]);
-  });
+    const { client, calls } = fake()
+    expect(await seedFromValues(client, SCOPE, new Map())).toEqual({ created: 0, updated: 0 })
+    expect(calls.batchCreate).toEqual([])
+  })
 
   it('chunks large sets at the server batch limit', async () => {
-    const { client, calls } = fake();
-    const values = new Map(Array.from({ length: 250 }, (_, i) => [`K${i}`, 'v'] as const));
+    const { client, calls } = fake()
+    const values = new Map(Array.from({ length: 250 }, (_, i) => [`K${i}`, 'v'] as const))
 
-    await seedFromValues(client, SCOPE, values);
+    await seedFromValues(client, SCOPE, values)
 
-    expect(calls.batchCreate.map((b) => b.length)).toEqual([100, 100, 50]);
-  });
-});
+    expect(calls.batchCreate.map((b) => b.length)).toEqual([100, 100, 50])
+  })
+})
 
 describe('ensureScope caching', () => {
   it('lists workspaces and environments once per run, not once per binding', async () => {
     // A twelve-binding repo was making 24 calls to the two heaviest read
     // endpoints before moving a secret - 24 chances to hit a loaded API.
-    const { client } = fake({ workspaces: ['ws'], environments: ['dev', 'prod', 'preview'] });
-    let wsLists = 0;
-    let envLists = 0;
+    const { client } = fake({ workspaces: ['ws'], environments: ['dev', 'prod', 'preview'] })
+    let wsLists = 0
+    let envLists = 0
     const c = client as unknown as {
-      workspaces: { list: () => Promise<unknown> };
-      environments: { list: () => Promise<unknown> };
-    };
-    const ws = c.workspaces.list;
-    const env = c.environments.list;
-    c.workspaces.list = () => { wsLists++; return ws(); };
-    c.environments.list = () => { envLists++; return env(); };
-
-    const cache = newScopeCache();
-    for (const environment of ['dev', 'prod', 'preview']) {
-      await ensureScope(client, { ...SCOPE, environment }, cache);
+      workspaces: { list: () => Promise<unknown> }
+      environments: { list: () => Promise<unknown> }
+    }
+    const ws = c.workspaces.list
+    const env = c.environments.list
+    c.workspaces.list = () => {
+      wsLists++
+      return ws()
+    }
+    c.environments.list = () => {
+      envLists++
+      return env()
     }
 
-    expect(wsLists).toBe(1);
-    expect(envLists).toBe(1);
-  });
+    const cache = newScopeCache()
+    for (const environment of ['dev', 'prod', 'preview']) {
+      await ensureScope(client, { ...SCOPE, environment }, cache)
+    }
+
+    expect(wsLists).toBe(1)
+    expect(envLists).toBe(1)
+  })
 
   it('still lists per workspace when bindings span several', async () => {
-    const { client } = fake({ workspaces: ['a', 'b'], environments: ['dev'] });
-    const cache = newScopeCache();
-    await ensureScope(client, { ...SCOPE, workspace: 'a' }, cache);
-    await ensureScope(client, { ...SCOPE, workspace: 'b' }, cache);
-    expect(cache.environments.size).toBe(2);
-  });
+    const { client } = fake({ workspaces: ['a', 'b'], environments: ['dev'] })
+    const cache = newScopeCache()
+    await ensureScope(client, { ...SCOPE, workspace: 'a' }, cache)
+    await ensureScope(client, { ...SCOPE, workspace: 'b' }, cache)
+    expect(cache.environments.size).toBe(2)
+  })
 
   it('remembers a workspace it just created rather than re-listing it', async () => {
     // D1 reads are eventually consistent, so a re-list could miss a workspace
     // created moments earlier and try to create it twice.
-    const { client, calls } = fake();
-    const cache = newScopeCache();
-    await ensureScope(client, { ...SCOPE, environment: 'dev' }, cache);
-    await ensureScope(client, { ...SCOPE, environment: 'prod' }, cache);
-    expect(calls.createdWorkspaces).toHaveLength(1);
-    expect(calls.createdEnvironments).toHaveLength(2);
-  });
-});
+    const { client, calls } = fake()
+    const cache = newScopeCache()
+    await ensureScope(client, { ...SCOPE, environment: 'dev' }, cache)
+    await ensureScope(client, { ...SCOPE, environment: 'prod' }, cache)
+    expect(calls.createdWorkspaces).toHaveLength(1)
+    expect(calls.createdEnvironments).toHaveLength(2)
+  })
+})

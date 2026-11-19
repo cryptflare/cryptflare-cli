@@ -12,38 +12,28 @@
  * rather pause it than delete it and lose the audit trail.
  */
 
-import { Command } from 'commander';
-import chalk from 'chalk';
+import { Command } from 'commander'
+import chalk from 'chalk'
 
-import { getClient } from '../lib/api.js';
-import { resolveOrg } from '../lib/resolve.js';
-import { requirePermission } from '../lib/permissions.js';
-import * as output from '../lib/output.js';
-import { confirmDestructive } from '../lib/confirm.js';
-import { timeAgo } from '../lib/timestamps.js';
-
-type ServiceTokenItem = {
-  id: string;
-  name: string;
-  description: string | null;
-  scopes: string[];
-  enabled: boolean;
-  last_used_at: string | null;
-  expires_at: string | null;
-  created_at: string;
-};
-
-type CreatedServiceToken = ServiceTokenItem & { token: string; ipAllowlist?: string[] };
+import { getClient } from '@/lib/api'
+import { resolveOrg } from '@/lib/resolve'
+import { requirePermission } from '@/lib/permissions'
+import * as output from '@/lib/output'
+import { confirmDestructive } from '@/lib/confirm'
+import { timeAgo } from '@/lib/timestamps'
 
 export const serviceTokenCommand = new Command('service-token')
   .alias('svc-token')
-  .description('Manage organisation service tokens (for CI and automation)');
+  .description('Manage organisation service tokens (for CI and automation)')
 
 /** Comma-separated flag -> array. Undefined when the flag was absent, so the request is unchanged. */
 function parseList(raw: string | undefined): string[] | undefined {
-  if (!raw) return undefined;
-  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  return parts.length > 0 ? parts : undefined;
+  if (!raw) return undefined
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return parts.length > 0 ? parts : undefined
 }
 
 serviceTokenCommand
@@ -54,17 +44,14 @@ serviceTokenCommand
   .option('-q, --quiet', 'Minimal output')
   .action(async (opts) => {
     try {
-      await requirePermission('service_tokens:read');
-      const org = resolveOrg(opts);
-      const data = await getClient().serviceTokens.list({ organisation: org }) as
-        | ServiceTokenItem[]
-        | { data: ServiceTokenItem[] };
-      const items = Array.isArray(data) ? data : data.data ?? [];
+      await requirePermission('service_tokens:read')
+      const org = resolveOrg(opts)
+      const items = await getClient().serviceTokens.list({ organisation: org })
 
-      if (opts.json) return output.json(items);
+      if (opts.json) return output.json(items)
       if (items.length === 0) {
-        output.info('No service tokens. Create one with `cf service-token create`.');
-        return;
+        output.info('No service tokens. Create one with `cf service-token create`.')
+        return
       }
 
       output.table(
@@ -73,17 +60,17 @@ serviceTokenCommand
           name: t.name,
           // Disabled tokens are the reason `toggle` exists; make the state
           // obvious rather than something you infer from a JSON dump.
-          status: t.enabled ? 'enabled' : chalk.yellow('disabled'),
+          status: t.disabled ? chalk.yellow('disabled') : 'enabled',
           scopes: t.scopes.join(','),
-          'last used': t.last_used_at ? timeAgo(t.last_used_at) : 'never',
-          expires: t.expires_at ? timeAgo(t.expires_at) : 'never',
+          'last used': t.lastUsedAt ? timeAgo(t.lastUsedAt) : 'never',
+          expires: t.expiresAt ? timeAgo(t.expiresAt) : 'never',
         })),
         { quiet: opts.quiet },
-      );
+      )
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 serviceTokenCommand
   .command('create')
@@ -108,9 +95,9 @@ unexpiring token is one you will never notice has leaked.`,
   )
   .action(async (opts) => {
     try {
-      await requirePermission('service_tokens:create');
-      const org = resolveOrg(opts);
-      const ipAllowlist = parseList(opts.ipAllow);
+      await requirePermission('service_tokens:create')
+      const org = resolveOrg(opts)
+      const ipAllowlist = parseList(opts.ipAllow)
 
       const data = await getClient().serviceTokens.create({
         organisation: org,
@@ -119,27 +106,30 @@ unexpiring token is one you will never notice has leaked.`,
         ...(opts.description ? { description: opts.description } : {}),
         ...(opts.expires ? { expiresAt: opts.expires } : {}),
         ...(ipAllowlist ? { ipAllowlist } : {}),
-      } as never) as CreatedServiceToken;
+      })
 
-      if (opts.json) return output.json(data);
+      if (opts.json) return output.json(data)
 
-      console.log();
-      output.success(`Created service token ${chalk.bold(data.name)}`);
-      console.log();
-      console.log(chalk.bold('Token:') + ' ' + chalk.cyan(data.token));
-      console.log();
+      output.print()
+      output.success(`Created service token ${chalk.bold(data.name)}`)
+      output.print()
+      output.print(chalk.bold('Token:') + ' ' + chalk.cyan(data.token))
+      output.print()
       if (data.ipAllowlist?.length) {
-        console.log(chalk.bold('IP allowlist:') + ' ' + data.ipAllowlist.join(', '));
+        output.print(chalk.bold('IP allowlist:') + ' ' + data.ipAllowlist.join(', '))
       }
       if (!opts.expires) {
-        console.log(chalk.yellow('!') + ' No expiry set. Consider --expires so a leaked token eventually dies.');
+        output.print(
+          chalk.yellow('!') +
+            ' No expiry set. Consider --expires so a leaked token eventually dies.',
+        )
       }
-      console.log(chalk.yellow('Save this token now. It will not be shown again.'));
-      console.log(chalk.dim('  Use it as CF_TOKEN in your pipeline.'));
+      output.print(chalk.yellow('Save this token now. It will not be shown again.'))
+      output.print(chalk.dim('  Use it as CF_TOKEN in your pipeline.'))
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 serviceTokenCommand
   .command('update <id>')
@@ -151,22 +141,22 @@ serviceTokenCommand
   .action(async (id: string, opts) => {
     try {
       if (!opts.name && !opts.scope) {
-        throw new Error('Nothing to update. Pass --name and/or --scope.');
+        throw new Error('Nothing to update. Pass --name and/or --scope.')
       }
-      const org = resolveOrg(opts);
+      const org = resolveOrg(opts)
       const data = await getClient().serviceTokens.update({
         organisation: org,
         tokenId: id,
         ...(opts.name ? { name: opts.name } : {}),
         ...(opts.scope ? { scopes: opts.scope } : {}),
-      });
+      })
 
-      if (opts.json) return output.json(data);
-      output.success(`Updated service token ${chalk.bold(id)}`);
+      if (opts.json) return output.json(data)
+      output.success(`Updated service token ${chalk.bold(id)}`)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 serviceTokenCommand
   .command('disable <id>')
@@ -174,13 +164,15 @@ serviceTokenCommand
   .option('-o, --org <id>', 'Organisation ID')
   .action(async (id: string, opts) => {
     try {
-      const org = resolveOrg(opts);
-      await getClient().serviceTokens.toggle({ organisation: org, tokenId: id, enabled: false });
-      output.success(`Disabled ${chalk.bold(id)}. Re-enable with \`cf service-token enable ${id}\`.`);
+      const org = resolveOrg(opts)
+      await getClient().serviceTokens.toggle({ organisation: org, tokenId: id, enabled: false })
+      output.success(
+        `Disabled ${chalk.bold(id)}. Re-enable with \`cf service-token enable ${id}\`.`,
+      )
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 serviceTokenCommand
   .command('enable <id>')
@@ -188,13 +180,13 @@ serviceTokenCommand
   .option('-o, --org <id>', 'Organisation ID')
   .action(async (id: string, opts) => {
     try {
-      const org = resolveOrg(opts);
-      await getClient().serviceTokens.toggle({ organisation: org, tokenId: id, enabled: true });
-      output.success(`Enabled ${chalk.bold(id)}`);
+      const org = resolveOrg(opts)
+      await getClient().serviceTokens.toggle({ organisation: org, tokenId: id, enabled: true })
+      output.success(`Enabled ${chalk.bold(id)}`)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 serviceTokenCommand
   .command('revoke <id>')
@@ -210,15 +202,15 @@ and keeps the audit trail intact.`,
   )
   .action(async (id: string, opts) => {
     try {
-      await requirePermission('service_tokens:revoke');
-      const org = resolveOrg(opts);
+      await requirePermission('service_tokens:revoke')
+      const org = resolveOrg(opts)
       await confirmDestructive({
         message: `This will permanently revoke service token ${chalk.bold(id)}. Anything using it stops working immediately.`,
         assumeYes: opts.yes,
-      });
-      await getClient().serviceTokens.revoke({ organisation: org, tokenId: id });
-      output.success(`Revoked ${chalk.bold(id)}`);
+      })
+      await getClient().serviceTokens.revoke({ organisation: org, tokenId: id })
+      output.success(`Revoked ${chalk.bold(id)}`)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })

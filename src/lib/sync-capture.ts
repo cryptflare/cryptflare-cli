@@ -9,12 +9,12 @@
  * this machine".
  */
 
-import { DEFAULT_CAPTURE_MODE, type CaptureMode } from './capture.js';
-import { hasManifest, loadManifest } from './project-manifest.js';
-import type { SyncBinding, SyncProject } from './sync-registry.js';
+import { DEFAULT_CAPTURE_MODE, type CaptureMode } from '@/lib/capture'
+import { hasManifest, loadManifest } from '@/lib/project-manifest'
+import type { SyncBinding, SyncProject } from '@/lib/sync-registry'
 
 /** Capture mode per bound file, as the project's committed manifest states it. */
-export type ManifestCapture = ReadonlyMap<string, CaptureMode>;
+export type ManifestCapture = ReadonlyMap<string, CaptureMode>
 
 /**
  * Reads the capture modes from a project's manifest.
@@ -24,19 +24,22 @@ export type ManifestCapture = ReadonlyMap<string, CaptureMode>;
  * not stop the files it describes from syncing.
  */
 export function loadManifestCapture(project: Pick<SyncProject, 'path'>): ManifestCapture {
-  const modes = new Map<string, CaptureMode>();
-  if (!hasManifest(project.path)) return modes;
+  const modes = new Map<string, CaptureMode>()
+  if (!hasManifest(project.path)) return modes
   try {
     for (const binding of loadManifest(project.path).bindings) {
-      if (binding.capture) modes.set(binding.file, binding.capture);
+      if (binding.capture) modes.set(binding.file, binding.capture)
     }
   } catch {
-    return new Map();
+    return new Map()
   }
-  return modes;
+  return modes
 }
 
 /** Registry override first, then the manifest, then the default (`off`). */
-export function resolveCapture(binding: SyncBinding, manifestCapture: ManifestCapture): CaptureMode {
-  return binding.capture ?? manifestCapture.get(binding.file) ?? DEFAULT_CAPTURE_MODE;
+export function resolveCapture(
+  binding: SyncBinding,
+  manifestCapture: ManifestCapture,
+): CaptureMode {
+  return binding.capture ?? manifestCapture.get(binding.file) ?? DEFAULT_CAPTURE_MODE
 }

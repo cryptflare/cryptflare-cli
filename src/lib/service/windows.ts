@@ -9,18 +9,18 @@
  * 261 character limit `schtasks /TR` imposes.
  */
 
-import { join } from 'node:path';
+import { join } from 'node:path'
 
-import { watchArgs, type ServiceSpec } from './spec.js';
+import { watchArgs, type ServiceSpec } from '@/lib/service/spec'
 
-export const WINDOWS_TASK_NAME = 'CryptFlare Sync';
+export const WINDOWS_TASK_NAME = 'CryptFlare Sync'
 
 export function windowsLauncherPath(configDir: string): string {
-  return join(configDir, 'sync-service.vbs');
+  return join(configDir, 'sync-service.vbs')
 }
 
 export function windowsLogPath(configDir: string): string {
-  return join(configDir, 'sync-service.log');
+  return join(configDir, 'sync-service.log')
 }
 
 /**
@@ -29,28 +29,28 @@ export function windowsLogPath(configDir: string): string {
  * unless they precede a quote, and a quote is escaped with a backslash.
  */
 export function quoteWindowsArg(arg: string): string {
-  if (arg !== '' && !/[\s"]/.test(arg)) return arg;
-  let quoted = '"';
-  let backslashes = 0;
+  if (arg !== '' && !/[\s"]/.test(arg)) return arg
+  let quoted = '"'
+  let backslashes = 0
   for (const ch of arg) {
     if (ch === '\\') {
-      backslashes += 1;
-      continue;
+      backslashes += 1
+      continue
     }
     if (ch === '"') {
-      quoted += '\\'.repeat(backslashes * 2 + 1);
+      quoted += '\\'.repeat(backslashes * 2 + 1)
     } else {
-      quoted += '\\'.repeat(backslashes);
+      quoted += '\\'.repeat(backslashes)
     }
-    quoted += ch;
-    backslashes = 0;
+    quoted += ch
+    backslashes = 0
   }
-  return `${quoted}${'\\'.repeat(backslashes * 2)}"`;
+  return `${quoted}${'\\'.repeat(backslashes * 2)}"`
 }
 
 /** A VBScript string literal: quotes are doubled, nothing else is special. */
 function vbsString(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
+  return `"${value.replace(/"/g, '""')}"`
 }
 
 /**
@@ -62,11 +62,11 @@ function vbsString(value: string): string {
  * that can redirect a console program's output without showing a window.
  */
 export function renderWindowsLauncher(spec: ServiceSpec, configDir: string): string {
-  const command = [spec.nodePath, spec.cliPath, ...watchArgs(spec)].map(quoteWindowsArg).join(' ');
+  const command = [spec.nodePath, spec.cliPath, ...watchArgs(spec)].map(quoteWindowsArg).join(' ')
   // `cmd /s /c "<command> >> "<log>" 2>&1"`: with /s, cmd strips exactly the
   // outer pair of quotes and runs the rest verbatim, so the quoting inside
   // survives.
-  const shellLine = `cmd /d /s /c "${command} >> ${quoteWindowsArg(windowsLogPath(configDir))} 2>&1"`;
+  const shellLine = `cmd /d /s /c "${command} >> ${quoteWindowsArg(windowsLogPath(configDir))} 2>&1"`
 
   return [
     "' Starts the CryptFlare sync loop with no console window.",
@@ -77,19 +77,23 @@ export function renderWindowsLauncher(spec: ServiceSpec, configDir: string): str
     'shell.Environment("Process")("NODE_ENV") = "production"',
     `WScript.Quit shell.Run(${vbsString(shellLine)}, 0, True)`,
     '',
-  ].join('\r\n');
+  ].join('\r\n')
 }
 
 /** Arguments for `schtasks.exe` that create (or replace) the logon task. */
 export function windowsCreateTaskArgs(configDir: string): string[] {
   return [
     '/Create',
-    '/TN', WINDOWS_TASK_NAME,
-    '/SC', 'ONLOGON',
+    '/TN',
+    WINDOWS_TASK_NAME,
+    '/SC',
+    'ONLOGON',
     // LIMITED: run with the user's normal rights, never elevated. The task
     // reads the user's own login and writes the user's own files.
-    '/RL', 'LIMITED',
-    '/TR', `wscript.exe ${quoteWindowsArg(windowsLauncherPath(configDir))}`,
+    '/RL',
+    'LIMITED',
+    '/TR',
+    `wscript.exe ${quoteWindowsArg(windowsLauncherPath(configDir))}`,
     '/F',
-  ];
+  ]
 }

@@ -1,13 +1,14 @@
-import type { CryptFlare } from '@cryptflare/sdk';
+import type { CryptFlare } from '@cryptflare/sdk'
 
-import { MAX_BATCH_SIZE, chunk } from './secret-validation.js';
+import { MAX_BATCH_SIZE, chunk } from '@/lib/secret-validation'
+import { errorStatus } from '@/lib/guards'
 
 type Scope = {
-  organisation?: string;
-  workspace: string;
-  environment: string;
-  podId?: string;
-};
+  organisation?: string
+  workspace: string
+  environment: string
+  podId?: string
+}
 
 /**
  * Decrypts secrets in as few requests as possible.
@@ -29,29 +30,29 @@ export async function revealSecrets(
   scope: Scope,
   keys?: string[],
 ): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+  const out = new Map<string, string>()
 
-  if (keys && keys.length === 0) return out;
+  if (keys && keys.length === 0) return out
 
   try {
     if (!keys) {
-      for (const secret of await client.secrets.revealAll(scope)) out.set(secret.key, secret.value);
-      return out;
+      for (const secret of await client.secrets.revealAll(scope)) out.set(secret.key, secret.value)
+      return out
     }
 
     // Chunked because the endpoint caps named keys at MAX_BATCH_SIZE, the
     // same ceiling the create/update batches use.
     for (const batch of chunk(keys)) {
-      const res = await client.secrets.revealMany({ ...scope, keys: batch });
-      for (const secret of res.secrets) out.set(secret.key, secret.value);
+      const res = await client.secrets.revealMany({ ...scope, keys: batch })
+      for (const secret of res.secrets) out.set(secret.key, secret.value)
     }
-    return out;
+    return out
   } catch (err) {
     // An API deployed before this endpoint existed answers 404. Falling back
     // keeps a newer CLI working against an older server instead of failing
     // outright; everything else is a real error and propagates.
-    if ((err as { status?: number }).status !== 404) throw err;
-    return revealOneByOne(client, scope, keys);
+    if (errorStatus(err) !== 404) throw err
+    return revealOneByOne(client, scope, keys)
   }
 }
 
@@ -61,19 +62,19 @@ async function revealOneByOne(
   scope: Scope,
   keys?: string[],
 ): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  let wanted = keys;
+  const out = new Map<string, string>()
+  let wanted = keys
 
   if (!wanted) {
-    wanted = [];
-    for await (const secret of await client.secrets.list(scope)) wanted.push(secret.key);
+    wanted = []
+    for await (const secret of await client.secrets.list(scope)) wanted.push(secret.key)
   }
 
   for (const key of wanted) {
-    const revealed = await client.secrets.reveal({ ...scope, key });
-    out.set(revealed.key, revealed.value);
+    const revealed = await client.secrets.reveal({ ...scope, key })
+    out.set(revealed.key, revealed.value)
   }
-  return out;
+  return out
 }
 
-export { MAX_BATCH_SIZE };
+export { MAX_BATCH_SIZE }

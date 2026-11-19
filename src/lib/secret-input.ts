@@ -20,49 +20,52 @@
  * warning cannot corrupt piped output.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs'
 
-import chalk from 'chalk';
-import prompts from 'prompts';
+import chalk from 'chalk'
+import prompts from 'prompts'
+import * as output from '@/lib/output'
 
 export type SecretValueSource = {
   /** Positional or `--value`. Present means it came from the command line. */
-  inline?: string | undefined;
+  inline?: string | undefined
   /** `--file <path>`, or an `@path` passed inline. */
-  file?: string | undefined;
+  file?: string | undefined
   /** Label used in the interactive prompt. */
-  promptLabel?: string;
-};
+  promptLabel?: string
+}
 
 /**
  * Warns that a value was supplied on the command line. stderr, so it never
  * contaminates `--json` output or a pipeline.
  */
 function warnInline(): void {
-  console.error(
+  output.printError(
     chalk.yellow('!') +
       ' Secret value passed on the command line - it will be stored in your shell history.\n' +
       chalk.dim('  Prefer:  cf secret set KEY            (prompts, hidden)\n') +
       chalk.dim('           echo -n "$VALUE" | cf secret set KEY\n') +
       chalk.dim('           cf secret set KEY --file ./value.txt'),
-  );
+  )
 }
 
 /** True when stdin is a pipe or file rather than a terminal. */
 export function hasPipedStdin(): boolean {
-  return !process.stdin.isTTY;
+  return !process.stdin.isTTY
 }
 
 async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk))
   // Strip exactly one trailing newline: `echo "$V" |` adds one, and a secret
   // almost never wants it. `printf` or `echo -n` remain byte-exact.
-  return Buffer.concat(chunks).toString('utf-8').replace(/\r?\n$/, '');
+  return Buffer.concat(chunks)
+    .toString('utf-8')
+    .replace(/\r?\n$/, '')
 }
 
 function readFromFile(path: string): string {
-  return readFileSync(path, 'utf-8').replace(/\r?\n$/, '');
+  return readFileSync(path, 'utf-8').replace(/\r?\n$/, '')
 }
 
 /**
@@ -72,37 +75,41 @@ function readFromFile(path: string): string {
  *         rejects empty values, so failing here saves a round trip.
  */
 export async function resolveSecretValue(source: SecretValueSource): Promise<string> {
-  const { inline, file, promptLabel = 'Secret value' } = source;
+  const { inline, file, promptLabel = 'Secret value' } = source
 
   // `@path` is a long-standing convention (curl, vault) for "read this file".
   if (inline?.startsWith('@')) {
-    const value = readFromFile(inline.slice(1));
-    if (!value) throw new Error(`${inline.slice(1)} is empty.`);
-    return value;
+    const value = readFromFile(inline.slice(1))
+    if (!value) throw new Error(`${inline.slice(1)} is empty.`)
+    return value
   }
 
   if (file) {
-    const value = readFromFile(file);
-    if (!value) throw new Error(`${file} is empty.`);
-    return value;
+    const value = readFromFile(file)
+    if (!value) throw new Error(`${file} is empty.`)
+    return value
   }
 
   if (inline !== undefined) {
-    warnInline();
-    if (!inline) throw new Error('Secret value is empty.');
-    return inline;
+    warnInline()
+    if (!inline) throw new Error('Secret value is empty.')
+    return inline
   }
 
   if (hasPipedStdin()) {
-    const value = await readStdin();
-    if (!value) throw new Error('No value received on stdin.');
-    return value;
+    const value = await readStdin()
+    if (!value) throw new Error('No value received on stdin.')
+    return value
   }
 
   const { value } = await prompts(
     { type: 'password', name: 'value', message: promptLabel },
-    { onCancel: () => { throw new Error('Cancelled.'); } },
-  );
-  if (!value) throw new Error('Secret value is empty.');
-  return value as string;
+    {
+      onCancel: () => {
+        throw new Error('Cancelled.')
+      },
+    },
+  )
+  if (typeof value !== 'string' || value === '') throw new Error('Secret value is empty.')
+  return value
 }

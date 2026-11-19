@@ -20,42 +20,43 @@
  * value. The files it points AT hold the secrets and stay gitignored.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 
-import { readCaptureMode, type CaptureMode } from './capture.js';
+import { readCaptureMode, type CaptureMode } from '@/lib/capture'
+import { errorMessage, isRecord, isStringArray } from '@/lib/guards'
 
 /** Conventional filename at the repository root. */
-export const MANIFEST_FILENAME = '.cryptflare.json';
+export const MANIFEST_FILENAME = '.cryptflare.json'
 
 export type ManifestBinding = {
   /** Path to the env-shaped file, relative to the manifest's directory. */
-  file: string;
+  file: string
   /** Workspace slug. Falls back to the manifest-level `workspace`. */
-  workspace?: string;
+  workspace?: string
   /** Environment slug. Falls back to the manifest-level `environment`. */
-  environment?: string;
+  environment?: string
   /** Optional pod (secret folder) within the environment. */
-  pod?: string;
+  pod?: string
   /**
    * What to do with a new local key. Falls back to the manifest-level
    * `capture`, then to `off`. See `./capture.ts`.
    */
-  capture?: CaptureMode;
-};
+  capture?: CaptureMode
+}
 
 export type ProjectManifest = {
-  version: 1;
+  version: 1
   /** Project id used when registering. Defaults to the directory name. */
-  id?: string;
+  id?: string
   /** Organisation ID. Falls back to the CLI default. */
-  org?: string;
+  org?: string
   /** Default workspace for bindings that do not name one. */
-  workspace?: string;
+  workspace?: string
   /** Default environment for bindings that do not name one. */
-  environment?: string;
+  environment?: string
   /** Default capture policy for bindings that do not set their own. */
-  capture?: CaptureMode;
+  capture?: CaptureMode
   /**
    * Opt-in to having bindings added automatically.
    *
@@ -70,148 +71,173 @@ export type ProjectManifest = {
    * to `true` to opt a hand-written manifest in, or remove it (or set
    * `false`) to take a generated one back under manual control.
    */
-  autoDiscover?: boolean;
+  autoDiscover?: boolean
   /**
    * Env files that must never be bound automatically, as paths relative to
    * the manifest. Only read when `autoDiscover` is on. This is how to say
    * "leave this one file alone" without turning discovery off for the rest.
    */
-  ignore?: string[];
-  bindings: ManifestBinding[];
-};
+  ignore?: string[]
+  bindings: ManifestBinding[]
+}
+
+/** A binding after parsing: the manifest-level defaults are filled in. */
+export type ResolvedManifestBinding = ManifestBinding & { workspace: string; environment: string }
+
+/** A parsed manifest. Every binding names its workspace and environment. */
+export type LoadedManifest = Omit<ProjectManifest, 'bindings'> & {
+  bindings: ResolvedManifestBinding[]
+}
 
 export class ManifestError extends Error {
   constructor(message: string) {
-    super(message);
-    this.name = 'ManifestError';
+    super(message)
+    this.name = 'ManifestError'
   }
 }
 
-const MANIFEST_VERSION = 1;
+const MANIFEST_VERSION = 1
 
 export function manifestPath(projectRoot: string): string {
-  return join(projectRoot, MANIFEST_FILENAME);
+  return join(projectRoot, MANIFEST_FILENAME)
 }
 
 export function hasManifest(projectRoot: string): boolean {
-  return existsSync(manifestPath(projectRoot));
+  return existsSync(manifestPath(projectRoot))
 }
 
 function optionalString(value: unknown, path: string): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined) return undefined
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new ManifestError(`${path} must be a non-empty string when present`);
+    throw new ManifestError(`${path} must be a non-empty string when present`)
   }
-  return value;
+  return value
 }
 
 function readCapture(value: unknown, path: string): CaptureMode | undefined {
   try {
-    return readCaptureMode(value, path);
+    return readCaptureMode(value, path)
   } catch (err) {
-    throw new ManifestError((err as Error).message);
+    throw new ManifestError(errorMessage(err))
   }
 }
 
-export function parseManifest(raw: unknown): ProjectManifest {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new ManifestError(`${MANIFEST_FILENAME} must contain a JSON object`);
+export function parseManifest(raw: unknown): LoadedManifest {
+  if (!isRecord(raw)) {
+    throw new ManifestError(`${MANIFEST_FILENAME} must contain a JSON object`)
   }
-  const obj = raw as Record<string, unknown>;
+  const obj = raw
 
   if (obj['version'] !== MANIFEST_VERSION) {
     throw new ManifestError(
       `unsupported version ${JSON.stringify(obj['version'])}; expected ${MANIFEST_VERSION}`,
-    );
+    )
   }
 
-  const bindingsRaw = obj['bindings'];
+  const bindingsRaw = obj['bindings']
   if (!Array.isArray(bindingsRaw) || bindingsRaw.length === 0) {
-    throw new ManifestError('"bindings" must be a non-empty array');
+    throw new ManifestError('"bindings" must be a non-empty array')
   }
 
-  const defaultWorkspace = optionalString(obj['workspace'], 'workspace');
-  const defaultEnvironment = optionalString(obj['environment'], 'environment');
-  const defaultCapture = readCapture(obj['capture'], 'capture');
+  const defaultWorkspace = optionalString(obj['workspace'], 'workspace')
+  const defaultEnvironment = optionalString(obj['environment'], 'environment')
+  const defaultCapture = readCapture(obj['capture'], 'capture')
 
   const bindings = bindingsRaw.map((entry, i) => {
-    const at = `bindings[${i}]`;
-    if (typeof entry !== 'object' || entry === null) {
-      throw new ManifestError(`${at} must be an object`);
+    const at = `bindings[${i}]`
+    if (!isRecord(entry)) {
+      throw new ManifestError(`${at} must be an object`)
     }
-    const b = entry as Record<string, unknown>;
+    const b = entry
 
-    const file = optionalString(b['file'], `${at}.file`);
-    if (!file) throw new ManifestError(`${at}.file is required`);
+    const file = optionalString(b['file'], `${at}.file`)
+    if (!file) throw new ManifestError(`${at}.file is required`)
     if (isAbsolute(file) || file.split(/[\\/]/).includes('..')) {
       // The manifest is committed, so a malicious or careless entry would
       // otherwise let `cf sync init` write outside the repository on every
       // machine that clones it.
-      throw new ManifestError(`${at}.file must be a relative path inside the project (got "${file}")`);
+      throw new ManifestError(
+        `${at}.file must be a relative path inside the project (got "${file}")`,
+      )
     }
 
-    const workspace = optionalString(b['workspace'], `${at}.workspace`) ?? defaultWorkspace;
+    const workspace = optionalString(b['workspace'], `${at}.workspace`) ?? defaultWorkspace
     if (!workspace) {
-      throw new ManifestError(`${at} has no workspace and no top-level "workspace" default is set`);
+      throw new ManifestError(`${at} has no workspace and no top-level "workspace" default is set`)
     }
-    const environment = optionalString(b['environment'], `${at}.environment`) ?? defaultEnvironment;
+    const environment = optionalString(b['environment'], `${at}.environment`) ?? defaultEnvironment
     if (!environment) {
-      throw new ManifestError(`${at} has no environment and no top-level "environment" default is set`);
+      throw new ManifestError(
+        `${at} has no environment and no top-level "environment" default is set`,
+      )
     }
 
-    const pod = optionalString(b['pod'], `${at}.pod`);
-    const capture = readCapture(b['capture'], `${at}.capture`) ?? defaultCapture;
-    return { file, workspace, environment, ...(pod ? { pod } : {}), ...(capture ? { capture } : {}) };
-  });
+    const pod = optionalString(b['pod'], `${at}.pod`)
+    const capture = readCapture(b['capture'], `${at}.capture`) ?? defaultCapture
+    return {
+      file,
+      workspace,
+      environment,
+      ...(pod ? { pod } : {}),
+      ...(capture ? { capture } : {}),
+    }
+  })
 
-  const autoDiscover = obj['autoDiscover'];
+  const autoDiscover = obj['autoDiscover']
   if (autoDiscover !== undefined && typeof autoDiscover !== 'boolean') {
-    throw new ManifestError('"autoDiscover" must be true or false when present');
+    throw new ManifestError('"autoDiscover" must be true or false when present')
   }
-  const ignoreRaw = obj['ignore'];
-  if (ignoreRaw !== undefined && (!Array.isArray(ignoreRaw) || ignoreRaw.some((entry) => typeof entry !== 'string' || entry.trim() === ''))) {
-    throw new ManifestError('"ignore" must be an array of file paths when present');
+  const ignoreRaw = obj['ignore']
+  if (
+    ignoreRaw !== undefined &&
+    (!isStringArray(ignoreRaw) || ignoreRaw.some((entry) => entry.trim() === ''))
+  ) {
+    throw new ManifestError('"ignore" must be an array of file paths when present')
   }
-  const ignore = (ignoreRaw as string[] | undefined) ?? [];
+  const ignore = ignoreRaw ?? []
+  const id = optionalString(obj['id'], 'id')
+  const org = optionalString(obj['org'], 'org')
 
-  const seen = new Set<string>();
+  const seen = new Set<string>()
   for (const b of bindings) {
     if (seen.has(b.file)) {
       // Two bindings for one file means two environments racing to own the
       // same bytes on every sync pass.
-      throw new ManifestError(`"${b.file}" is bound more than once`);
+      throw new ManifestError(`"${b.file}" is bound more than once`)
     }
-    seen.add(b.file);
+    seen.add(b.file)
   }
 
   return {
     version: MANIFEST_VERSION,
-    ...(optionalString(obj['id'], 'id') ? { id: obj['id'] as string } : {}),
-    ...(optionalString(obj['org'], 'org') ? { org: obj['org'] as string } : {}),
+    ...(id ? { id } : {}),
+    ...(org ? { org } : {}),
     ...(defaultWorkspace ? { workspace: defaultWorkspace } : {}),
     ...(defaultEnvironment ? { environment: defaultEnvironment } : {}),
     ...(defaultCapture ? { capture: defaultCapture } : {}),
     ...(autoDiscover !== undefined ? { autoDiscover } : {}),
     ...(ignore.length > 0 ? { ignore } : {}),
     bindings,
-  };
+  }
 }
 
-export function loadManifest(projectRoot: string): ProjectManifest {
-  const path = manifestPath(projectRoot);
+export function loadManifest(projectRoot: string): LoadedManifest {
+  const path = manifestPath(projectRoot)
   if (!existsSync(path)) {
-    throw new ManifestError(`No ${MANIFEST_FILENAME} in ${projectRoot}. Create one with \`cf sync init --write\`.`);
+    throw new ManifestError(
+      `No ${MANIFEST_FILENAME} in ${projectRoot}. Create one with \`cf sync init --write\`.`,
+    )
   }
-  let raw: unknown;
+  let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(path, 'utf-8'));
+    raw = JSON.parse(readFileSync(path, 'utf-8'))
   } catch (err) {
-    throw new ManifestError(`${path} is not valid JSON: ${(err as Error).message}`);
+    throw new ManifestError(`${path} is not valid JSON: ${errorMessage(err)}`)
   }
   try {
-    return parseManifest(raw);
+    return parseManifest(raw)
   } catch (err) {
-    throw new ManifestError(`${path}: ${(err as Error).message}`);
+    throw new ManifestError(`${path}: ${errorMessage(err)}`)
   }
 }
 
@@ -220,30 +246,32 @@ export function loadManifest(projectRoot: string): ProjectManifest {
  * differ from the defaults, so a single-workspace project stays terse.
  */
 export function renderManifest(manifest: ProjectManifest): string {
-  const out: Record<string, unknown> = { version: MANIFEST_VERSION };
-  if (manifest.id) out['id'] = manifest.id;
-  if (manifest.org) out['org'] = manifest.org;
-  if (manifest.workspace) out['workspace'] = manifest.workspace;
-  if (manifest.environment) out['environment'] = manifest.environment;
-  if (manifest.capture) out['capture'] = manifest.capture;
-  if (manifest.autoDiscover !== undefined) out['autoDiscover'] = manifest.autoDiscover;
-  if (manifest.ignore && manifest.ignore.length > 0) out['ignore'] = manifest.ignore;
+  const out: Record<string, unknown> = { version: MANIFEST_VERSION }
+  if (manifest.id) out['id'] = manifest.id
+  if (manifest.org) out['org'] = manifest.org
+  if (manifest.workspace) out['workspace'] = manifest.workspace
+  if (manifest.environment) out['environment'] = manifest.environment
+  if (manifest.capture) out['capture'] = manifest.capture
+  if (manifest.autoDiscover !== undefined) out['autoDiscover'] = manifest.autoDiscover
+  if (manifest.ignore && manifest.ignore.length > 0) out['ignore'] = manifest.ignore
 
   out['bindings'] = manifest.bindings.map((b) => ({
     file: b.file,
     ...(b.workspace && b.workspace !== manifest.workspace ? { workspace: b.workspace } : {}),
-    ...(b.environment && b.environment !== manifest.environment ? { environment: b.environment } : {}),
+    ...(b.environment && b.environment !== manifest.environment
+      ? { environment: b.environment }
+      : {}),
     ...(b.pod ? { pod: b.pod } : {}),
     ...(b.capture && b.capture !== manifest.capture ? { capture: b.capture } : {}),
-  }));
+  }))
 
-  return `${JSON.stringify(out, null, 2)}\n`;
+  return `${JSON.stringify(out, null, 2)}\n`
 }
 
 export function writeManifest(projectRoot: string, manifest: ProjectManifest): string {
-  const path = manifestPath(projectRoot);
-  writeFileSync(path, renderManifest(manifest), 'utf-8');
-  return path;
+  const path = manifestPath(projectRoot)
+  writeFileSync(path, renderManifest(manifest), 'utf-8')
+  return path
 }
 
 /**
@@ -260,33 +288,43 @@ export function writeManifest(projectRoot: string, manifest: ProjectManifest): s
  *
  * @returns The bindings that were actually written.
  */
-export function appendManifestBindings(projectRoot: string, additions: readonly ManifestBinding[]): ManifestBinding[] {
-  if (additions.length === 0) return [];
-  const path = manifestPath(projectRoot);
-  const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+export function appendManifestBindings(
+  projectRoot: string,
+  additions: readonly ManifestBinding[],
+): ManifestBinding[] {
+  if (additions.length === 0) return []
+  const path = manifestPath(projectRoot)
+  const raw: unknown = JSON.parse(readFileSync(path, 'utf-8'))
   // Validates the file as it is now, so a manifest broken mid-edit is not
   // written over.
-  const manifest = parseManifest(raw);
-  if (manifest.autoDiscover !== true) return [];
+  const manifest = parseManifest(raw)
+  const entries = isRecord(raw) ? raw['bindings'] : undefined
+  if (!Array.isArray(entries)) return []
+  if (manifest.autoDiscover !== true) return []
 
-  const bound = new Set(manifest.bindings.map((binding) => binding.file));
-  const fresh = additions.filter((binding) => !bound.has(binding.file));
-  if (fresh.length === 0) return [];
+  const bound = new Set(manifest.bindings.map((binding) => binding.file))
+  const fresh = additions.filter((binding) => !bound.has(binding.file))
+  if (fresh.length === 0) return []
 
-  const entries = raw['bindings'] as unknown[];
   for (const binding of fresh) {
     entries.push({
       file: binding.file,
-      ...(binding.workspace && binding.workspace !== manifest.workspace ? { workspace: binding.workspace } : {}),
-      ...(binding.environment && binding.environment !== manifest.environment ? { environment: binding.environment } : {}),
+      ...(binding.workspace && binding.workspace !== manifest.workspace
+        ? { workspace: binding.workspace }
+        : {}),
+      ...(binding.environment && binding.environment !== manifest.environment
+        ? { environment: binding.environment }
+        : {}),
       ...(binding.pod ? { pod: binding.pod } : {}),
-      ...(binding.capture && binding.capture !== manifest.capture ? { capture: binding.capture } : {}),
-    });
+      ...(binding.capture && binding.capture !== manifest.capture
+        ? { capture: binding.capture }
+        : {}),
+    })
   }
 
   // Renamed into place so an editor or another `cf` never reads half a file.
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
-  renameSync(tmp, path);
-  return fresh;
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8')
+  renameSync(tmp, path)
+  return fresh
 }

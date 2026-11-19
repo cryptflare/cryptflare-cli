@@ -1,47 +1,92 @@
-import chalk from 'chalk';
+import { format } from 'node:util'
 
-import { APIError, AuthenticationError, ConfigurationError, CryptFlareError } from '@cryptflare/sdk';
+import chalk from 'chalk'
+
+import {
+  APIError,
+  AuthenticationError,
+  ConfigurationError,
+  ConnectionError,
+  CryptFlareError,
+  TimeoutError,
+} from '@cryptflare/sdk'
+
+import { EXIT_CODES } from '@/lib/exit-codes'
+
+/**
+ * Status marks shown before a result line. They are the CLI's own UI (the
+ * same marks `cf doctor`, `cf sync` and `cf update` have always printed), kept
+ * here so every command draws them the same way.
+ */
+export const MARK = { ok: '\u2713', fail: '\u2717' } as const
+
+/** Writes one line of command output to stdout (data a user may pipe). Formats like `console.log`. */
+export function print(...parts: unknown[]): void {
+  process.stdout.write(`${format(...parts)}\n`)
+}
+
+/** Writes one line to stderr (diagnostics, prompts, progress), never mixed into piped stdout. */
+export function printError(...parts: unknown[]): void {
+  process.stderr.write(`${format(...parts)}\n`)
+}
 
 export function json(data: unknown) {
-  console.log(JSON.stringify(data, null, 2));
+  print(JSON.stringify(data, null, 2))
 }
 
 export function table(rows: Record<string, string>[], opts?: { quiet?: boolean }) {
   if (opts?.quiet) {
-    rows.forEach((row) => console.log(Object.values(row).join('\t')));
-    return;
+    rows.forEach((row) => print(Object.values(row).join('\t')))
+    return
   }
 
   if (rows.length === 0) {
-    console.log(chalk.dim('No results'));
-    return;
+    print(chalk.dim('No results'))
+    return
   }
 
-  const keys = Object.keys(rows[0]);
-  const widths = keys.map((k) =>
-    Math.max(k.length, ...rows.map((r) => (r[k] ?? '').length)),
-  );
+  const keys = Object.keys(rows[0] ?? {})
+  const columns = keys.map((key) => ({
+    key,
+    width: Math.max(key.length, ...rows.map((r) => (r[key] ?? '').length)),
+  }))
 
-  const header = keys.map((k, i) => chalk.bold(k.toUpperCase().padEnd(widths[i]))).join('  ');
-  console.log(header);
-  console.log(chalk.dim('-'.repeat(header.length)));
+  const header = columns
+    .map(({ key, width }) => chalk.bold(key.toUpperCase().padEnd(width)))
+    .join('  ')
+  print(header)
+  print(chalk.dim('-'.repeat(header.length)))
 
   rows.forEach((row) => {
-    const line = keys.map((k, i) => (row[k] ?? '').padEnd(widths[i])).join('  ');
-    console.log(line);
-  });
+    print(columns.map(({ key, width }) => (row[key] ?? '').padEnd(width)).join('  '))
+  })
 }
 
 export function success(message: string) {
-  console.log(chalk.green('✓') + ' ' + message);
+  print(`${chalk.green(MARK.ok)} ${message}`)
 }
 
+/**
+ * Warnings and notes go to stderr so they never end up inside piped data
+ * (`cf env > .env`, `cf secret list --json | jq`).
+ */
 export function warn(message: string) {
-  console.log(chalk.yellow('!') + ' ' + message);
+  printError(chalk.yellow('!') + ' ' + message)
 }
 
+/** Status notes for the person at the terminal. Written to stderr, see {@link warn}. */
 export function info(message: string) {
-  console.log(chalk.blue('i') + ' ' + message);
+  printError(chalk.blue('i') + ' ' + message)
+}
+
+/**
+ * Prints a usage problem (missing or invalid flag) to stderr and exits with
+ * `EXIT_CODES.USAGE`.
+ */
+export function usageError(message: string, hint?: string): never {
+  printError(chalk.red('Error:') + ` ${message}`)
+  if (hint) printError(hint)
+  process.exit(EXIT_CODES.USAGE)
 }
 
 /**
@@ -55,40 +100,42 @@ export function info(message: string) {
  *   `Error`                - non-SDK runtime error.
  *
  * `instanceof` checks are ordered most-specific first so subclass branches
- * fire before their parents.
+ * fire before their parents. Exit codes come from `EXIT_CODES`: 3 for auth,
+ * 4 for network and timeouts, 1 for everything else.
  */
 export function handleError(err: unknown): never {
   if (err instanceof APIError) {
-    const code = err.code ?? 'UNKNOWN';
-    console.error(chalk.red(`Error [${code}]`) + ` ${err.message}`);
+    const code = err.code ?? 'UNKNOWN'
+    printError(chalk.red(`Error [${code}]`) + ` ${err.message}`)
     if (err instanceof AuthenticationError) {
-      console.error(chalk.dim('Run `cf auth login` to authenticate.'));
+      printError(chalk.dim('Run `cf auth login` to authenticate.'))
     }
     if (err.requestId) {
-      console.error(chalk.dim(`Request ID: ${err.requestId}`));
+      printError(chalk.dim(`Request ID: ${err.requestId}`))
     }
-    process.exit(1);
+    process.exit(err instanceof AuthenticationError ? EXIT_CODES.AUTH : EXIT_CODES.ERROR)
   }
 
   if (err instanceof ConfigurationError) {
-    console.error(chalk.red('Error:') + ` ${err.message}`);
-    console.error(chalk.dim('Run `cf auth login` to authenticate.'));
-    process.exit(1);
+    printError(chalk.red('Error:') + ` ${err.message}`)
+    printError(chalk.dim('Run `cf auth login` to authenticate.'))
+    process.exit(EXIT_CODES.AUTH)
   }
 
   if (err instanceof CryptFlareError) {
     // Connection / timeout errors share the SDK base but lack a stable code
     // we want to branch on.
-    const code = err.code ?? 'ERROR';
-    console.error(chalk.red(`Error [${code}]`) + ` ${err.message}`);
-    process.exit(1);
+    const code = err.code ?? 'ERROR'
+    printError(chalk.red(`Error [${code}]`) + ` ${err.message}`)
+    const network = err instanceof ConnectionError || err instanceof TimeoutError
+    process.exit(network ? EXIT_CODES.NETWORK : EXIT_CODES.ERROR)
   }
 
   if (err instanceof Error) {
-    console.error(chalk.red('Error:') + ` ${err.message}`);
-    process.exit(1);
+    printError(chalk.red('Error:') + ` ${err.message}`)
+    process.exit(EXIT_CODES.ERROR)
   }
 
-  console.error(chalk.red('Unknown error'));
-  process.exit(1);
+  printError(chalk.red('Unknown error'))
+  process.exit(EXIT_CODES.ERROR)
 }

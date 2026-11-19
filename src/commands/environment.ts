@@ -1,16 +1,15 @@
-import { Command } from 'commander';
-import chalk from 'chalk';
+import { Command } from 'commander'
+import chalk from 'chalk'
 
-import { getClient } from '../lib/api.js';
-import { resolveOrg } from '../lib/resolve.js';
-import * as output from '../lib/output.js';
-import { resolveSlug } from '../lib/slug.js';
-
-type EnvironmentItem = { id: string; name: string; slug: string; created_at: string };
+import { getClient } from '@/lib/api'
+import { resolveOrg } from '@/lib/resolve'
+import * as output from '@/lib/output'
+import { resolveSlug } from '@/lib/slug'
+import { EXIT_CODES } from '@/lib/exit-codes'
 
 export const environmentCommand = new Command('environment')
   .alias('env-mgmt')
-  .description('Manage environments');
+  .description('Manage environments')
 
 environmentCommand
   .command('list')
@@ -20,24 +19,24 @@ environmentCommand
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
     try {
-      const org = resolveOrg(opts);
-      const workspace = opts.workspace;
+      const org = resolveOrg(opts)
+      const workspace = opts.workspace
       if (!workspace) {
-        console.error('Workspace required. Pass --workspace.');
-        process.exit(1);
+        output.printError('Workspace required. Pass --workspace.')
+        process.exit(EXIT_CODES.USAGE)
       }
 
       const data = await getClient().environments.list({
         organisation: org,
         workspace,
-      }) as EnvironmentItem[];
+      })
 
-      if (opts.json) return output.json(data);
-      output.table(data.map((e) => ({ name: e.name, slug: e.slug, id: chalk.dim(e.id) })));
+      if (opts.json) return output.json(data)
+      output.table(data.map((e) => ({ name: e.name, slug: e.slug, id: chalk.dim(e.id) })))
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 environmentCommand
   .command('create')
@@ -49,11 +48,11 @@ environmentCommand
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
     try {
-      const org = resolveOrg(opts);
-      const workspace = opts.workspace;
+      const org = resolveOrg(opts)
+      const workspace = opts.workspace
       if (!workspace) {
-        console.error('Workspace required. Pass --workspace.');
-        process.exit(1);
+        output.printError('Workspace required. Pass --workspace.')
+        process.exit(EXIT_CODES.USAGE)
       }
 
       const data = await getClient().environments.create({
@@ -61,11 +60,11 @@ environmentCommand
         workspace,
         name: opts.name,
         slug: resolveSlug(opts.name, opts.slug),
-      }) as { id: string; name: string; slug: string };
+      })
 
-      if (opts.json) return output.json(data);
-      output.success(`Created environment ${chalk.bold(data.name)} (${data.slug})`);
+      if (opts.json) return output.json(data)
+      output.success(`Created environment ${chalk.bold(data.name)} (${data.slug})`)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })

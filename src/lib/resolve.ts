@@ -1,21 +1,21 @@
-import { getOrg, getDefault } from './config.js';
-import { resolveProjectDefaults, resolveProjectTarget } from './project-context.js';
+import { getOrg, getDefault } from '@/lib/config'
+import { resolveProjectDefaults, resolveProjectTarget } from '@/lib/project-context'
 
 export type ContextOptions = {
-  workspace?: string;
-  env?: string;
-  org?: string;
+  workspace?: string
+  env?: string
+  org?: string
   /** `--binding <file>`: use the scope of this bound file from `.cryptflare.json`. */
-  binding?: string;
-};
+  binding?: string
+}
 
 export type ResolvedContext = {
-  org: string;
-  workspace: string;
-  env: string;
+  org: string
+  workspace: string
+  env: string
   /** Pod of the binding the context came from, when it has one. */
-  pod?: string;
-};
+  pod?: string
+}
 
 /**
  * Resolves organisation, workspace and environment for a command.
@@ -34,43 +34,43 @@ export type ResolvedContext = {
  * @throws Error naming the missing value and how to supply it.
  */
 export function resolveContext(opts: ContextOptions, cwd: string = process.cwd()): ResolvedContext {
-  const fullyStated = Boolean(opts.workspace && opts.env) && !opts.binding;
+  const fullyStated = Boolean(opts.workspace && opts.env) && !opts.binding
   const target = fullyStated
     ? null
     : resolveProjectTarget({
-      cwd,
-      binding: opts.binding,
-      environment: opts.env,
-      workspace: opts.workspace,
-    });
+        cwd,
+        binding: opts.binding,
+        environment: opts.env,
+        workspace: opts.workspace,
+      })
 
   // No binding was chosen (the scope came from flags, or `--env` names an
   // environment the manifest does not bind): the project still says which
   // organisation and workspace it belongs to.
-  const project = target ?? resolveProjectDefaults(cwd);
+  const project = target ?? resolveProjectDefaults(cwd)
 
-  const org = opts.org ?? project.org ?? getOrg();
+  const org = opts.org ?? project.org ?? getOrg()
   if (!org) {
-    throw new Error('No organisation selected. Run `cf org select` or pass --org.');
+    throw new Error('No organisation selected. Run `cf org select` or pass --org.')
   }
 
-  const workspace = opts.workspace ?? project.workspace ?? getDefault('workspace');
+  const workspace = opts.workspace ?? project.workspace ?? getDefault('workspace')
   if (!workspace) {
     throw new Error(
-      'No workspace specified. Pass --workspace, run this inside a project with a .cryptflare.json, '
-        + 'or set a default with `cf config set defaults.workspace <slug>`.',
-    );
+      'No workspace specified. Pass --workspace, run this inside a project with a .cryptflare.json, ' +
+        'or set a default with `cf config set defaults.workspace <slug>`.',
+    )
   }
 
-  const env = opts.env ?? target?.environment ?? getDefault('environment');
+  const env = opts.env ?? target?.environment ?? getDefault('environment')
   if (!env) {
     throw new Error(
-      'No environment specified. Pass --env, run this inside a project with a .cryptflare.json, '
-        + 'or set a default with `cf config set defaults.environment <slug>`.',
-    );
+      'No environment specified. Pass --env, run this inside a project with a .cryptflare.json, ' +
+        'or set a default with `cf config set defaults.environment <slug>`.',
+    )
   }
 
-  return { org, workspace, env, ...(target?.pod ? { pod: target.pod } : {}) };
+  return { org, workspace, env, ...(target?.pod ? { pod: target.pod } : {}) }
 }
 
 /**
@@ -80,9 +80,9 @@ export function resolveContext(opts: ContextOptions, cwd: string = process.cwd()
  * @throws Error when no organisation is selected.
  */
 export function resolveOrg(opts: { org?: string }, cwd: string = process.cwd()): string {
-  const org = opts.org ?? resolveProjectDefaults(cwd).org ?? getOrg();
+  const org = opts.org ?? resolveProjectDefaults(cwd).org ?? getOrg()
   if (!org) {
-    throw new Error('No organisation selected. Run `cf org select` or pass --org.');
+    throw new Error('No organisation selected. Run `cf org select` or pass --org.')
   }
-  return org;
+  return org
 }

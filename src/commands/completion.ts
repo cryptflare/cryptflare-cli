@@ -12,33 +12,35 @@
  *   cf completion zsh > "${fpath[1]}/_cf"
  */
 
-import { Command } from 'commander';
+import { Command } from 'commander'
 
-import * as output from '../lib/output.js';
+import * as output from '@/lib/output'
 
-type CommandNode = { name: string; flags: string[]; subcommands: CommandNode[] };
+type CommandNode = { name: string; flags: string[]; subcommands: CommandNode[] }
 
 /** Walks a commander tree into a plain structure the generators can render. */
 function describe(cmd: Command): CommandNode {
   return {
     name: cmd.name(),
     flags: cmd.options.map((o) => o.long).filter((l): l is string => Boolean(l)),
-    subcommands: cmd.commands.map((c) => describe(c as Command)),
-  };
+    subcommands: cmd.commands.map((c) => describe(c)),
+  }
 }
 
 function bashScript(root: CommandNode): string {
-  const topLevel = root.subcommands.map((c) => c.name).join(' ');
+  const topLevel = root.subcommands.map((c) => c.name).join(' ')
 
   // One case arm per command listing its subcommands and flags. Generated
   // rather than written so it cannot drift from the actual tree.
   const arms = root.subcommands
     .map((cmd) => {
-      const subs = cmd.subcommands.map((s) => s.name).join(' ');
-      const flags = [...new Set([...cmd.flags, ...cmd.subcommands.flatMap((s) => s.flags)])].join(' ');
-      return `    ${cmd.name})\n      COMPREPLY=( $(compgen -W "${subs} ${flags}" -- "$cur") )\n      return 0\n      ;;`;
+      const subs = cmd.subcommands.map((s) => s.name).join(' ')
+      const flags = [...new Set([...cmd.flags, ...cmd.subcommands.flatMap((s) => s.flags)])].join(
+        ' ',
+      )
+      return `    ${cmd.name})\n      COMPREPLY=( $(compgen -W "${subs} ${flags}" -- "$cur") )\n      return 0\n      ;;`
     })
-    .join('\n');
+    .join('\n')
 
   return `# CryptFlare CLI completion for bash
 # Install:  source <(cf completion bash)
@@ -63,21 +65,21 @@ ${arms}
 }
 
 complete -F _cf_completion cf
-`;
+`
 }
 
 function zshScript(root: CommandNode): string {
-  const descriptions = root.subcommands.map((c) => `    '${c.name}'`).join('\n');
+  const descriptions = root.subcommands.map((c) => `    '${c.name}'`).join('\n')
 
   const arms = root.subcommands
     .map((cmd) => {
-      const subs = cmd.subcommands.map((s) => `        '${s.name}'`).join('\n');
+      const subs = cmd.subcommands.map((s) => `        '${s.name}'`).join('\n')
       const flags = [...new Set([...cmd.flags, ...cmd.subcommands.flatMap((s) => s.flags)])]
         .map((f) => `        '${f}'`)
-        .join('\n');
-      return `      ${cmd.name})\n        _values 'option' \\\n${[subs, flags].filter(Boolean).join(' \\\n')}\n        ;;`;
+        .join('\n')
+      return `      ${cmd.name})\n        _values 'option' \\\n${[subs, flags].filter(Boolean).join(' \\\n')}\n        ;;`
     })
-    .join('\n');
+    .join('\n')
 
   return `#compdef cf
 # CryptFlare CLI completion for zsh
@@ -100,7 +102,7 @@ ${arms}
 }
 
 compdef _cf cf
-`;
+`
 }
 
 function fishScript(root: CommandNode): string {
@@ -111,23 +113,29 @@ function fishScript(root: CommandNode): string {
     // Stop fish offering files where a command belongs.
     'complete -c cf -f',
     '',
-  ];
+  ]
 
   for (const cmd of root.subcommands) {
-    lines.push(`complete -c cf -n "__fish_use_subcommand" -a "${cmd.name}"`);
+    lines.push(`complete -c cf -n "__fish_use_subcommand" -a "${cmd.name}"`)
     for (const sub of cmd.subcommands) {
-      lines.push(`complete -c cf -n "__fish_seen_subcommand_from ${cmd.name}" -a "${sub.name}"`);
+      lines.push(`complete -c cf -n "__fish_seen_subcommand_from ${cmd.name}" -a "${sub.name}"`)
     }
     for (const flag of new Set([...cmd.flags, ...cmd.subcommands.flatMap((s) => s.flags)])) {
-      lines.push(`complete -c cf -n "__fish_seen_subcommand_from ${cmd.name}" -l "${flag.replace(/^--/, '')}"`);
+      lines.push(
+        `complete -c cf -n "__fish_seen_subcommand_from ${cmd.name}" -l "${flag.replace(/^--/, '')}"`,
+      )
     }
   }
 
-  return `${lines.join('\n')}\n`;
+  return `${lines.join('\n')}\n`
 }
 
-const GENERATORS = { bash: bashScript, zsh: zshScript, fish: fishScript } as const;
-type Shell = keyof typeof GENERATORS;
+const GENERATORS = { bash: bashScript, zsh: zshScript, fish: fishScript } as const
+type Shell = keyof typeof GENERATORS
+
+function isShell(value: string): value is Shell {
+  return Object.prototype.hasOwnProperty.call(GENERATORS, value)
+}
 
 export function buildCompletionCommand(program: Command): Command {
   return new Command('completion')
@@ -144,14 +152,16 @@ Examples:
     )
     .action((shell: string) => {
       try {
-        if (!(shell in GENERATORS)) {
-          throw new Error(`Unsupported shell "${shell}". Choose one of: ${Object.keys(GENERATORS).join(', ')}.`);
+        if (!isShell(shell)) {
+          throw new Error(
+            `Unsupported shell "${shell}". Choose one of: ${Object.keys(GENERATORS).join(', ')}.`,
+          )
         }
         // The tree is read from the live program, so completions cannot drift
         // from the commands that actually exist.
-        console.log(GENERATORS[shell as Shell](describe(program)));
+        output.print(GENERATORS[shell](describe(program)))
       } catch (err) {
-        output.handleError(err);
+        output.handleError(err)
       }
-    });
+    })
 }

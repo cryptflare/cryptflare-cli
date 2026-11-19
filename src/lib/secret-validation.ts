@@ -19,41 +19,41 @@
  */
 
 /** Server rule: `UPPER_SNAKE_CASE`. */
-export const KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-export const MAX_KEY_LENGTH = 256;
-export const MAX_VALUE_LENGTH = 65536;
+export const KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/
+export const MAX_KEY_LENGTH = 256
+export const MAX_VALUE_LENGTH = 65536
 /** Server caps a single batch request at 100 entries. */
-export const MAX_BATCH_SIZE = 100;
+export const MAX_BATCH_SIZE = 100
 
-export type SecretProblem = { key: string; reason: string };
+export type SecretProblem = { key: string; reason: string }
 
 /**
  * Returns every problem in the set, not just the first. A file with three bad
  * keys should take one round trip to fix, not three.
  */
 export function validateSecrets(secrets: Map<string, string>): SecretProblem[] {
-  const problems: SecretProblem[] = [];
+  const problems: SecretProblem[] = []
 
   for (const [key, value] of secrets) {
     if (key.length > MAX_KEY_LENGTH) {
-      problems.push({ key, reason: `key is ${key.length} characters (max ${MAX_KEY_LENGTH})` });
+      problems.push({ key, reason: `key is ${key.length} characters (max ${MAX_KEY_LENGTH})` })
     } else if (!KEY_PATTERN.test(key)) {
       problems.push({
         key,
         reason: `key must be UPPER_SNAKE_CASE (suggested: ${suggestKey(key)})`,
-      });
+      })
     }
 
     if (value.length === 0) {
       // The concrete case that broke a push: `VITE_API_URL=` with nothing after
       // the equals sign.
-      problems.push({ key, reason: 'value is empty - remove the line or give it a value' });
+      problems.push({ key, reason: 'value is empty - remove the line or give it a value' })
     } else if (value.length > MAX_VALUE_LENGTH) {
-      problems.push({ key, reason: `value is ${value.length} bytes (max ${MAX_VALUE_LENGTH})` });
+      problems.push({ key, reason: `value is ${value.length} bytes (max ${MAX_VALUE_LENGTH})` })
     }
   }
 
-  return problems;
+  return problems
 }
 
 /** Best-effort correction shown alongside a rejected key. */
@@ -63,13 +63,13 @@ export function suggestKey(key: string): string {
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toUpperCase()
     .replace(/^_+|_+$/g, '')
-    .replace(/_{2,}/g, '_');
-  return KEY_PATTERN.test(fixed) ? fixed : 'VALID_KEY_NAME';
+    .replace(/_{2,}/g, '_')
+  return KEY_PATTERN.test(fixed) ? fixed : 'VALID_KEY_NAME'
 }
 
 /** Splits into server-sized batches. */
 export function chunk<T>(items: T[], size = MAX_BATCH_SIZE): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
 }

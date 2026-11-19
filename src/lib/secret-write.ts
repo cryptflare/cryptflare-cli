@@ -1,23 +1,24 @@
-import type { CryptFlare } from '@cryptflare/sdk';
+import type { CryptFlare } from '@cryptflare/sdk'
+import { errorMessage, errorStatus } from '@/lib/guards'
 
 export type WriteScope = {
-  organisation: string;
-  workspace: string;
-  environment: string;
-  podId?: string;
-};
+  organisation: string
+  workspace: string
+  environment: string
+  podId?: string
+}
 
 export type SecretWrite = {
-  environment: string;
-  key: string;
-  version: number;
-  action: 'created' | 'rotated';
-};
+  environment: string
+  key: string
+  version: number
+  action: 'created' | 'rotated'
+}
 
 export type SecretWriteOptions = {
-  description?: string;
-  metadata?: Record<string, string>;
-};
+  description?: string
+  metadata?: Record<string, string>
+}
 
 /**
  * Creates a secret, or rotates it when the key already exists.
@@ -44,21 +45,31 @@ export async function upsertSecret(
       value,
       ...(options.description ? { description: options.description } : {}),
       ...(options.metadata ? { metadata: options.metadata } : {}),
-    });
-    return { environment: scope.environment, key: created.key, version: created.version, action: 'created' };
+    })
+    return {
+      environment: scope.environment,
+      key: created.key,
+      version: created.version,
+      action: 'created',
+    }
   } catch (err) {
-    if ((err as { status?: number }).status !== 409) throw err;
+    if (errorStatus(err) !== 409) throw err
   }
 
-  const { podId: _podId, ...keyScope } = scope;
-  const rotated = await client.secrets.rotate({ ...keyScope, key, value });
-  return { environment: scope.environment, key: rotated.key ?? key, version: rotated.version, action: 'rotated' };
+  const { podId: _podId, ...keyScope } = scope
+  const rotated = await client.secrets.rotate({ ...keyScope, key, value })
+  return {
+    environment: scope.environment,
+    key: rotated.key ?? key,
+    version: rotated.version,
+    action: 'rotated',
+  }
 }
 
 export type MultiWriteResult = {
-  written: SecretWrite[];
-  failed: Array<{ environment: string; message: string }>;
-};
+  written: SecretWrite[]
+  failed: Array<{ environment: string; message: string }>
+}
 
 /**
  * Writes one value to several environments of a workspace.
@@ -75,13 +86,15 @@ export async function upsertAcrossEnvironments(
   value: string,
   options: SecretWriteOptions = {},
 ): Promise<MultiWriteResult> {
-  const result: MultiWriteResult = { written: [], failed: [] };
+  const result: MultiWriteResult = { written: [], failed: [] }
   for (const environment of environments) {
     try {
-      result.written.push(await upsertSecret(client, { ...scope, environment }, key, value, options));
+      result.written.push(
+        await upsertSecret(client, { ...scope, environment }, key, value, options),
+      )
     } catch (err) {
-      result.failed.push({ environment, message: (err as Error).message ?? String(err) });
+      result.failed.push({ environment, message: errorMessage(err) })
     }
   }
-  return result;
+  return result
 }

@@ -15,60 +15,72 @@
  * `cf sync init --create --yes`, the same path a person would run by hand.
  */
 
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readdirSync, type Dirent } from 'node:fs'
+import { join, resolve } from 'node:path'
 
-import { findEnvFiles } from './discover.js';
-import { hasManifest } from './project-manifest.js';
-import type { SyncRegistry } from './sync-registry.js';
+import { findEnvFiles } from '@/lib/discover'
+import { hasManifest } from '@/lib/project-manifest'
+import type { SyncRegistry } from '@/lib/sync-registry'
 
 /** How far below a root a repository may sit: `~/code/org/repo` is depth 2. */
-export const REPOSITORY_SEARCH_DEPTH = 3;
+export const REPOSITORY_SEARCH_DEPTH = 3
 
 /** Directories that hold other people's code or build output, never a project of yours. */
-const SKIPPED = new Set(['node_modules', 'vendor', 'dist', 'build', '.cache', '.venv', 'venv', 'target']);
+const SKIPPED = new Set([
+  'node_modules',
+  'vendor',
+  'dist',
+  'build',
+  '.cache',
+  '.venv',
+  'venv',
+  'target',
+])
 
 /**
  * Git repositories under a root. A repository is not searched for
  * repositories nested inside it: a checkout vendored into another project is
  * part of that project, not one of its own.
  */
-export function findRepositories(root: string, maxDepth: number = REPOSITORY_SEARCH_DEPTH): string[] {
-  const found: string[] = [];
+export function findRepositories(
+  root: string,
+  maxDepth: number = REPOSITORY_SEARCH_DEPTH,
+): string[] {
+  const found: string[] = []
 
   const walk = (directory: string, depth: number) => {
     if (existsSync(join(directory, '.git'))) {
-      found.push(directory);
-      return;
+      found.push(directory)
+      return
     }
-    if (depth >= maxDepth) return;
+    if (depth >= maxDepth) return
 
-    let entries: Dirent[];
+    let entries: Dirent[]
     try {
-      entries = readdirSync(directory, { withFileTypes: true });
+      entries = readdirSync(directory, { withFileTypes: true })
     } catch {
-      return; // Unreadable: nothing to set up there.
+      return // Unreadable: nothing to set up there.
     }
     for (const entry of entries) {
       if (entry.isDirectory() && !entry.name.startsWith('.') && !SKIPPED.has(entry.name)) {
-        walk(join(directory, entry.name), depth + 1);
+        walk(join(directory, entry.name), depth + 1)
       }
     }
-  };
+  }
 
-  walk(resolve(root), 0);
-  return found.sort();
+  walk(resolve(root), 0)
+  return found.sort()
 }
 
 export type PendingRepository = {
-  path: string;
+  path: string
   /**
    * `adopt`: it already carries a manifest (a fresh clone) - pull its files
    * and register. `create`: it has env files and no manifest - write one,
    * create the remote side, upload.
    */
-  action: 'adopt' | 'create';
-};
+  action: 'adopt' | 'create'
+}
 
 /**
  * Repositories under the registry's roots that are not registered yet and
@@ -76,17 +88,17 @@ export type PendingRepository = {
  * file is left alone: there is nothing of it to manage.
  */
 export function pendingRepositories(registry: SyncRegistry): PendingRepository[] {
-  const registered = new Set(registry.projects.map((project) => resolve(project.path)));
-  const pending: PendingRepository[] = [];
-  const seen = new Set<string>();
+  const registered = new Set(registry.projects.map((project) => resolve(project.path)))
+  const pending: PendingRepository[] = []
+  const seen = new Set<string>()
 
   for (const root of registry.roots ?? []) {
     for (const path of findRepositories(root)) {
-      if (registered.has(path) || seen.has(path)) continue;
-      seen.add(path);
-      if (hasManifest(path)) pending.push({ path, action: 'adopt' });
-      else if (findEnvFiles(path).length > 0) pending.push({ path, action: 'create' });
+      if (registered.has(path) || seen.has(path)) continue
+      seen.add(path)
+      if (hasManifest(path)) pending.push({ path, action: 'adopt' })
+      else if (findEnvFiles(path).length > 0) pending.push({ path, action: 'create' })
     }
   }
-  return pending;
+  return pending
 }

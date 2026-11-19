@@ -26,29 +26,44 @@
  * files land on the same name, each gets its file name appended.
  */
 
-import { readdirSync, type Dirent } from 'node:fs';
-import { basename, join, relative, sep } from 'node:path';
+import { readdirSync, type Dirent } from 'node:fs'
+import { basename, join, relative, sep } from 'node:path'
 
-import type { CaptureMode } from './capture.js';
-import type { ManifestBinding, ProjectManifest } from './project-manifest.js';
+import type { CaptureMode } from '@/lib/capture'
+import type { ManifestBinding, ProjectManifest } from '@/lib/project-manifest'
 
 /** Directories that never hold a project's own env files. */
 const SKIPPED_DIRECTORIES = new Set([
-  'node_modules', '.git', 'dist', 'build', 'out', 'coverage', '.next', '.turbo', '.wrangler', '.venv', 'venv',
-  'vendor', 'target', 'references', 'repositories', 'templates', '.cache',
-]);
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.next',
+  '.turbo',
+  '.wrangler',
+  '.venv',
+  'venv',
+  'vendor',
+  'target',
+  'references',
+  'repositories',
+  'templates',
+  '.cache',
+])
 
 /** Suffixes of files that are committed on purpose and hold no real values. */
-const EXAMPLE_SUFFIX = /\.(example|sample|template|dist|hbs|defaults)$/i;
+const EXAMPLE_SUFFIX = /\.(example|sample|template|dist|hbs|defaults)$/i
 
 /**
  * Files that sit beside an env file and share its name but are not one: the
  * sync engine's conflict sidecars and half-written temporaries, and editor
  * backups. Binding one would upload a stale copy as its own environment.
  */
-const LEFTOVER = /(\.cf-conflict-.*|\.tmp-\d+|\.bak|\.orig|\.old|\.swp|~)$/i;
+const LEFTOVER = /(\.cf-conflict-.*|\.tmp-\d+|\.bak|\.orig|\.old|\.swp|~)$/i
 
-const ENV_FILE = /^(\.env(\..+)?|\.envrc|\.dev\.vars(\..+)?|\.[a-z0-9-]+\.vars)$/i;
+const ENV_FILE = /^(\.env(\..+)?|\.envrc|\.dev\.vars(\..+)?|\.[a-z0-9-]+\.vars)$/i
 
 /** Stage names recognised in a file name, mapped to the stage they mean. */
 const STAGES: Record<string, string> = {
@@ -62,59 +77,62 @@ const STAGES: Record<string, string> = {
   preview: 'preview',
   prod: 'production',
   production: 'production',
-};
+}
 
-const DEFAULT_STAGE = 'dev';
-const MAX_SEARCH_DEPTH = 6;
+const DEFAULT_STAGE = 'dev'
+const MAX_SEARCH_DEPTH = 6
 
 export type DiscoveredFile = {
   /** Path relative to the repository root, with forward slashes. */
-  file: string;
-  environment: string;
-  stage: string;
-  capture: CaptureMode;
-};
+  file: string
+  environment: string
+  stage: string
+  capture: CaptureMode
+}
 
 /** Whether a file name is an env file this tool manages. */
 export function isEnvFileName(name: string): boolean {
-  return ENV_FILE.test(name) && !EXAMPLE_SUFFIX.test(name) && !LEFTOVER.test(name);
+  return ENV_FILE.test(name) && !EXAMPLE_SUFFIX.test(name) && !LEFTOVER.test(name)
 }
 
 function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 /** The stage a file name declares, or `dev` when it declares none. */
 export function stageOf(name: string): string {
-  const words = name.toLowerCase().split('.').filter(Boolean);
+  const words = name.toLowerCase().split('.').filter(Boolean)
   for (const word of words) {
-    const stage = STAGES[word];
+    const stage = STAGES[word]
     // `.dev.vars.production` says "dev" (wrangler's file name) and then the
     // real stage. The last recognised word is the one that was added to say
     // which stage this copy is for.
-    if (stage && word !== 'dev') return stage;
+    if (stage && word !== 'dev') return stage
   }
-  return words.some((word) => STAGES[word] === 'dev') ? 'dev' : DEFAULT_STAGE;
+  return words.some((word) => STAGES[word] === 'dev') ? 'dev' : DEFAULT_STAGE
 }
 
 function kindOf(name: string): string | null {
-  const lower = name.toLowerCase();
-  if (lower === '.envrc') return 'shell';
-  if (lower.endsWith('.vars') || lower.startsWith('.dev.vars')) return 'worker';
-  return null;
+  const lower = name.toLowerCase()
+  if (lower === '.envrc') return 'shell'
+  if (lower.endsWith('.vars') || lower.startsWith('.dev.vars')) return 'worker'
+  return null
 }
 
 function appOf(directory: string): string {
-  if (directory === '' || directory === '.') return 'root';
-  const segments = directory.split('/');
-  if (segments[0] === 'apps' && segments.length > 1) segments.shift();
-  else if (segments[0] === 'packages') segments[0] = 'pkg';
-  return slug(segments.join('-')) || 'root';
+  if (directory === '' || directory === '.') return 'root'
+  const segments = directory.split('/')
+  if (segments[0] === 'apps' && segments.length > 1) segments.shift()
+  else if (segments[0] === 'packages') segments[0] = 'pkg'
+  return slug(segments.join('-')) || 'root'
 }
 
 /** The words of a file name that tell two colliding files apart. */
 function fileToken(name: string): string {
-  return slug(name.replace(/^\./, '')) || 'env';
+  return slug(name.replace(/^\./, '')) || 'env'
 }
 
 /**
@@ -124,30 +142,33 @@ function fileToken(name: string): string {
  */
 export function planBindings(files: readonly string[]): DiscoveredFile[] {
   const planned = [...files].sort().map((file) => {
-    const name = basename(file);
-    const directory = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
-    const stage = stageOf(name);
-    const kind = kindOf(name);
+    const name = basename(file)
+    const directory = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : ''
+    const stage = stageOf(name)
+    const kind = kindOf(name)
     return {
       file,
       name,
       stage,
       environment: [appOf(directory), stage, kind].filter(Boolean).join('-'),
-    };
-  });
+    }
+  })
 
-  const counts = new Map<string, number>();
-  for (const item of planned) counts.set(item.environment, (counts.get(item.environment) ?? 0) + 1);
+  const counts = new Map<string, number>()
+  for (const item of planned) counts.set(item.environment, (counts.get(item.environment) ?? 0) + 1)
 
   return planned.map((item) => ({
     file: item.file,
     stage: item.stage,
     // Every file that would share a name gets its own file name appended,
     // not just the second one, so neither looks like "the real one".
-    environment: (counts.get(item.environment) ?? 0) > 1 ? `${item.environment}-${fileToken(item.name)}` : item.environment,
+    environment:
+      (counts.get(item.environment) ?? 0) > 1
+        ? `${item.environment}-${fileToken(item.name)}`
+        : item.environment,
     // A new line in a development file is a new secret. Anywhere else, ask.
     capture: item.stage === DEFAULT_STAGE ? 'auto' : 'off',
-  }));
+  }))
 }
 
 /**
@@ -167,53 +188,57 @@ export function planNewBindings(
   existing: ReadonlyArray<{ file: string; environment?: string | undefined }>,
   files: readonly string[],
 ): DiscoveredFile[] {
-  const bound = new Set(existing.map((binding) => binding.file));
-  const fresh = files.filter((file) => !bound.has(file));
-  if (fresh.length === 0) return [];
+  const bound = new Set(existing.map((binding) => binding.file))
+  const fresh = files.filter((file) => !bound.has(file))
+  if (fresh.length === 0) return []
 
-  const taken = new Set(existing.map((binding) => binding.environment).filter((name): name is string => Boolean(name)));
-  const added: DiscoveredFile[] = [];
+  const taken = new Set(
+    existing.map((binding) => binding.environment).filter((name): name is string => Boolean(name)),
+  )
+  const added: DiscoveredFile[] = []
 
   // Planned together with the bound files so a new `.env.local` beside a
   // bound `.env` is seen to collide with it, exactly as it would have been
   // had both existed on day one.
   for (const item of planBindings([...bound, ...fresh])) {
-    if (bound.has(item.file)) continue;
+    if (bound.has(item.file)) continue
 
-    let environment = item.environment;
-    const token = fileToken(basename(item.file));
-    if (taken.has(environment) && !environment.endsWith(`-${token}`)) environment = `${environment}-${token}`;
-    const stem = environment;
-    for (let n = 2; taken.has(environment); n++) environment = `${stem}-${n}`;
+    let environment = item.environment
+    const token = fileToken(basename(item.file))
+    if (taken.has(environment) && !environment.endsWith(`-${token}`))
+      environment = `${environment}-${token}`
+    const stem = environment
+    for (let n = 2; taken.has(environment); n++) environment = `${stem}-${n}`
 
-    taken.add(environment);
-    added.push({ ...item, environment });
+    taken.add(environment)
+    added.push({ ...item, environment })
   }
-  return added;
+  return added
 }
 
 /** Finds env files under a directory, skipping dependencies, build output and examples. */
 export function findEnvFiles(root: string): string[] {
-  const found: string[] = [];
+  const found: string[] = []
 
   const walk = (directory: string, depth: number) => {
-    let entries: Dirent[];
+    let entries: Dirent[]
     try {
-      entries = readdirSync(directory, { withFileTypes: true });
+      entries = readdirSync(directory, { withFileTypes: true })
     } catch {
-      return; // Unreadable directory: nothing of ours to find there.
+      return // Unreadable directory: nothing of ours to find there.
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        if (depth < MAX_SEARCH_DEPTH && !SKIPPED_DIRECTORIES.has(entry.name)) walk(join(directory, entry.name), depth + 1);
+        if (depth < MAX_SEARCH_DEPTH && !SKIPPED_DIRECTORIES.has(entry.name))
+          walk(join(directory, entry.name), depth + 1)
       } else if (entry.isFile() && isEnvFileName(entry.name)) {
-        found.push(relative(root, join(directory, entry.name)).split(sep).join('/'));
+        found.push(relative(root, join(directory, entry.name)).split(sep).join('/'))
       }
     }
-  };
+  }
 
-  walk(root, 0);
-  return found.sort();
+  walk(root, 0)
+  return found.sort()
 }
 
 /**
@@ -226,8 +251,8 @@ export function buildManifest(
   discovered: readonly DiscoveredFile[],
   options: { org?: string | undefined; workspace?: string | undefined } = {},
 ): ProjectManifest {
-  const workspace = options.workspace ?? (slug(basename(root)) || 'project');
-  const allAuto = discovered.every((item) => item.capture === 'auto');
+  const workspace = options.workspace ?? (slug(basename(root)) || 'project')
+  const allAuto = discovered.every((item) => item.capture === 'auto')
 
   return {
     version: 1,
@@ -239,11 +264,13 @@ export function buildManifest(
     // Generated, so the sync service may add a binding when a new env file
     // appears. A manifest written by hand does not carry this and is left alone.
     autoDiscover: true,
-    bindings: discovered.map((item): ManifestBinding => ({
-      file: item.file,
-      workspace,
-      environment: item.environment,
-      capture: item.capture,
-    })),
-  };
+    bindings: discovered.map(
+      (item): ManifestBinding => ({
+        file: item.file,
+        workspace,
+        environment: item.environment,
+        capture: item.capture,
+      }),
+    ),
+  }
 }

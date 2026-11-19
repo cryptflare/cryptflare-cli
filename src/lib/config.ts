@@ -1,33 +1,34 @@
-import { chmodSync, existsSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, statSync } from 'node:fs'
 
-import Conf from 'conf';
+import Conf from 'conf'
+import { isOneOf } from '@/lib/guards'
 
 type PermissionCacheEntry = {
   /** First 12 chars of the bearer token; identifies which token the cache
    * belongs to so a different login wipes the entry on access. */
-  tokenPrefix: string;
-  permissions: string[];
+  tokenPrefix: string
+  permissions: string[]
   /** ISO 8601 stamp; refreshed from `auth.whoami` after PERMISSIONS_TTL_MS. */
-  fetchedAt: string;
-};
+  fetchedAt: string
+}
 
 type CfConfig = {
-  token?: string;
-  org?: string;
+  token?: string
+  org?: string
   defaults?: {
-    workspace?: string;
-    environment?: string;
-  };
+    workspace?: string
+    environment?: string
+  }
   /**
    * `true` enables anonymous CLI telemetry (command name + version + duration
    * + outcome). No tokens, args, or workspace identifiers are ever sent.
    * Default: `undefined` (treated as off until the user opts in).
    */
-  telemetry?: boolean;
+  telemetry?: boolean
   /** Permissions cache. Keyed implicitly by tokenPrefix - if the bearer
    * token changes, the entry is treated as a miss and refetched. */
-  permissions?: PermissionCacheEntry;
-};
+  permissions?: PermissionCacheEntry
+}
 
 const config = new Conf<CfConfig>({
   projectName: 'cryptflare',
@@ -56,7 +57,7 @@ const config = new Conf<CfConfig>({
       },
     },
   },
-});
+})
 
 /**
  * Tightens permissions on an existing config file.
@@ -70,83 +71,96 @@ const config = new Conf<CfConfig>({
  * no-op on Windows, so it is skipped there.
  */
 function ensureConfigFileIsPrivate(): void {
-  if (process.platform === 'win32') return;
+  if (process.platform === 'win32') return
   try {
-    const path = config.path;
-    if (!existsSync(path)) return;
-    const mode = statSync(path).mode & 0o777;
-    if (mode !== 0o600) chmodSync(path, 0o600);
+    const path = config.path
+    if (!existsSync(path)) return
+    const mode = statSync(path).mode & 0o777
+    if (mode !== 0o600) chmodSync(path, 0o600)
   } catch {
     // Unreadable, on a filesystem without permissions, or owned by someone
     // else - none of which should prevent the command the user actually ran.
   }
 }
 
-ensureConfigFileIsPrivate();
+ensureConfigFileIsPrivate()
 
 export function isTelemetryEnabled(): boolean {
   // DO_NOT_TRACK and CF_TELEMETRY override the saved config.
-  if (process.env.DO_NOT_TRACK === '1' || process.env.CF_TELEMETRY === 'off') return false;
-  if (process.env.CF_TELEMETRY === 'on') return true;
-  return config.get('telemetry') === true;
+  if (process.env.DO_NOT_TRACK === '1' || process.env.CF_TELEMETRY === 'off') return false
+  if (process.env.CF_TELEMETRY === 'on') return true
+  return config.get('telemetry') === true
 }
 
 export function setTelemetry(enabled: boolean) {
-  config.set('telemetry', enabled);
+  config.set('telemetry', enabled)
 }
 
 export function getToken(): string | undefined {
-  return process.env.CF_TOKEN ?? config.get('token');
+  return process.env.CF_TOKEN ?? config.get('token')
 }
 
 export function setToken(token: string) {
-  config.set('token', token);
+  config.set('token', token)
 }
 
 export function clearToken() {
-  config.delete('token');
+  config.delete('token')
   // A different identity should never inherit the previous user's
   // cached permissions. Wipe alongside the bearer token.
-  config.delete('permissions');
+  config.delete('permissions')
 }
 
 export function getCachedPermissions(): PermissionCacheEntry | undefined {
-  return config.get('permissions');
+  return config.get('permissions')
 }
 
 export function setCachedPermissions(entry: PermissionCacheEntry) {
-  config.set('permissions', entry);
+  config.set('permissions', entry)
 }
 
 export function clearCachedPermissions() {
-  config.delete('permissions');
+  config.delete('permissions')
 }
 
 export function getOrg(): string | undefined {
-  return process.env.CF_ORG ?? config.get('org');
+  return process.env.CF_ORG ?? config.get('org')
 }
 
 export function setOrg(org: string) {
-  config.set('org', org);
+  config.set('org', org)
 }
 
 export function getDefault(key: 'workspace' | 'environment'): string | undefined {
-  const envMap = { workspace: 'CF_WORKSPACE', environment: 'CF_ENVIRONMENT' } as const;
-  return process.env[envMap[key]] ?? config.get(`defaults.${key}`);
+  const envMap = { workspace: 'CF_WORKSPACE', environment: 'CF_ENVIRONMENT' } as const
+  return process.env[envMap[key]] ?? config.get(`defaults.${key}`)
 }
 
 export function setDefault(key: string, value: string) {
-  config.set(key, value);
+  config.set(key, value)
 }
 
-export function deleteKey(key: string) {
-  config.delete(key as keyof CfConfig);
+/** Keys `cf config unset` may remove. Anything else is not a stored setting. */
+export const UNSETTABLE_KEYS = [
+  'org',
+  'token',
+  'telemetry',
+  'defaults',
+  'defaults.workspace',
+  'defaults.environment',
+] as const
+
+/** Removes a stored setting. Returns `false` when `key` is not one of {@link UNSETTABLE_KEYS}. */
+export function deleteKey(key: string): boolean {
+  if (!isOneOf(UNSETTABLE_KEYS, key)) return false
+  config.delete(key)
+  return true
 }
 
 export function getAllConfig(): Record<string, unknown> {
-  return config.store;
+  return config.store
 }
 
 export function getConfigPath(): string {
-  return config.path;
+  return config.path
 }

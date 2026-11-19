@@ -18,14 +18,11 @@
  *     user to re-login.
  */
 
-import { getToken, getCachedPermissions, setCachedPermissions } from './config.js';
-import { getClient } from './api.js';
+import { getToken, getCachedPermissions, setCachedPermissions } from '@/lib/config'
+import { getClient } from '@/lib/api'
+import { errorStatus } from '@/lib/guards'
 
-const PERMISSIONS_TTL_MS = 5 * 60 * 1000;
-
-type WhoamiResponse = {
-  permissions: string[];
-};
+const PERMISSIONS_TTL_MS = 5 * 60 * 1000
 
 /**
  * `null` means "could not determine" - the refresh failed and there is no
@@ -33,58 +30,56 @@ type WhoamiResponse = {
  * decide", never as "denied".
  */
 export async function getEffectivePermissions(): Promise<string[] | null> {
-  const token = getToken();
+  const token = getToken()
   if (!token) {
-    throw new Error('Not authenticated. Run `cf login` first.');
+    throw new Error('Not authenticated. Run `cf login` first.')
   }
-  const tokenPrefix = token.slice(0, 12);
+  const tokenPrefix = token.slice(0, 12)
 
-  const cached = getCachedPermissions();
-  const cacheUsable = cached && cached.tokenPrefix === tokenPrefix;
+  const cached = getCachedPermissions()
+  const cacheUsable = cached && cached.tokenPrefix === tokenPrefix
   if (cacheUsable) {
-    const ageMs = Date.now() - new Date(cached.fetchedAt).getTime();
+    const ageMs = Date.now() - new Date(cached.fetchedAt).getTime()
     if (ageMs >= 0 && ageMs < PERMISSIONS_TTL_MS) {
-      return cached.permissions;
+      return cached.permissions
     }
   }
 
   try {
-    // SDK WhoAmI type is stale (no `permissions` field). Cast through
-    // unknown so we don't lie about the SDK contract here.
-    const res = (await getClient().auth.whoami()) as unknown as WhoamiResponse;
-    const permissions = Array.isArray(res?.permissions) ? res.permissions : [];
+    const res = await getClient().auth.whoami()
+    const permissions = Array.isArray(res?.permissions) ? res.permissions : []
     setCachedPermissions({
       tokenPrefix,
       permissions,
       fetchedAt: new Date().toISOString(),
-    });
-    return permissions;
+    })
+    return permissions
   } catch (err) {
     // A bad credential is a real answer: fail closed so the user is told to
     // log in rather than watching every later call 401.
-    const status = (err as { status?: number }).status;
-    if (status === 401 || status === 403) throw err;
+    const status = errorStatus(err)
+    if (status === 401 || status === 403) throw err
 
     // Anything else - 5xx, DNS, timeout - is the advisory check being
     // unavailable, not a denial. Refreshing scopes is a convenience; letting
     // it take down the command turns a nicety into a hard dependency. A
     // 503 on /whoami aborted an entire `cf sync init` bootstrap this way.
-    if (cacheUsable) return cached.permissions;
-    return null;
+    if (cacheUsable) return cached.permissions
+    return null
   }
 }
 
 export class InsufficientPermissionError extends Error {
-  readonly required: string;
-  readonly granted: string[];
+  readonly required: string
+  readonly granted: string[]
 
   constructor(required: string, granted: string[]) {
     super(
       `Insufficient permission. Need: ${required}. Have: ${granted.length > 0 ? granted.join(', ') : '(none)'}.`,
-    );
-    this.required = required;
-    this.granted = granted;
-    this.name = 'InsufficientPermissionError';
+    )
+    this.required = required
+    this.granted = granted
+    this.name = 'InsufficientPermissionError'
   }
 }
 
@@ -94,11 +89,11 @@ export class InsufficientPermissionError extends Error {
  * authoritative check; this just fails the user fast.
  */
 export async function requirePermission(required: string): Promise<void> {
-  const granted = await getEffectivePermissions();
+  const granted = await getEffectivePermissions()
   // Unknown scopes: proceed. The server enforces the same rule and will
   // reject with an authoritative error if this really is not permitted.
-  if (granted === null) return;
+  if (granted === null) return
   if (!granted.includes(required)) {
-    throw new InsufficientPermissionError(required, granted);
+    throw new InsufficientPermissionError(required, granted)
   }
 }

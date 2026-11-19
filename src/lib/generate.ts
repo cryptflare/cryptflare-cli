@@ -1,10 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto'
 
 /** Random bytes behind a generated secret when no size is given. */
-export const DEFAULT_GENERATED_BYTES = 32;
+export const DEFAULT_GENERATED_BYTES = 32
 /** Below this a generated value is too guessable to call a secret. */
-export const MIN_GENERATED_BYTES = 16;
-export const MAX_GENERATED_BYTES = 1024;
+export const MIN_GENERATED_BYTES = 16
+export const MAX_GENERATED_BYTES = 1024
 
 /**
  * Generates a secret value from the operating system's CSPRNG.
@@ -18,9 +18,9 @@ export function generateSecretValue(bytes: number = DEFAULT_GENERATED_BYTES): st
   if (!Number.isInteger(bytes) || bytes < MIN_GENERATED_BYTES || bytes > MAX_GENERATED_BYTES) {
     throw new RangeError(
       `Generated secrets must be between ${MIN_GENERATED_BYTES} and ${MAX_GENERATED_BYTES} bytes (got ${bytes}).`,
-    );
+    )
   }
-  return randomBytes(bytes).toString('base64url');
+  return randomBytes(bytes).toString('base64url')
 }
 
 /**
@@ -28,6 +28,6 @@ export function generateSecretValue(bytes: number = DEFAULT_GENERATED_BYTES): st
  * apart in a log or a tool result without disclosing either.
  */
 export async function fingerprint(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Buffer.from(digest).subarray(0, 6).toString('hex');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Buffer.from(digest).subarray(0, 6).toString('hex')
 }

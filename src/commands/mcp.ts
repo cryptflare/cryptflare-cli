@@ -9,15 +9,15 @@
  * The tools are in `../lib/mcp/tools.ts`. None of them returns a secret value.
  */
 
-import { Command } from 'commander';
+import { Command } from 'commander'
 
-import { getClient } from '../lib/api.js';
-import { createMcpHandler, serveStdio } from '../lib/mcp/protocol.js';
-import { buildTools, SERVER_INSTRUCTIONS } from '../lib/mcp/tools.js';
-import * as output from '../lib/output.js';
-import { loadRegistry } from '../lib/sync-registry.js';
-import { loadState, saveState } from '../lib/sync-state.js';
-import { VERSION } from '../version.js';
+import { getClient } from '@/lib/api'
+import { createMcpHandler, serveStdio } from '@/lib/mcp/protocol'
+import { buildTools, SERVER_INSTRUCTIONS } from '@/lib/mcp/tools'
+import * as output from '@/lib/output'
+import { loadRegistry } from '@/lib/sync-registry'
+import { loadState, saveState } from '@/lib/sync-state'
+import { VERSION } from '@/version'
 
 const serveCommand = new Command('serve')
   .description('Run a local MCP server over stdio, for AI agents working in this repository')
@@ -43,20 +43,20 @@ and sync secrets, and never return a secret value to the agent.`,
           // answer `initialize`) before login, so the agent is told to log in
           // by a tool error rather than by a server that never appears.
           get client() {
-            return getClient();
+            return getClient()
           },
           cwd: opts.cwd ?? process.cwd(),
           loadRegistry,
           loadState,
           saveState,
         }),
-      });
-      await serveStdio(handler, process.stdin, process.stdout);
+      })
+      await serveStdio(handler, process.stdin, process.stdout)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 export const mcpCommand = new Command('mcp')
   .description('Model Context Protocol server for AI coding agents')
-  .addCommand(serveCommand);
+  .addCommand(serveCommand)

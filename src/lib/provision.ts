@@ -1,16 +1,16 @@
-import type { CryptFlare } from '@cryptflare/sdk';
+import type { CryptFlare } from '@cryptflare/sdk'
 
-import { chunk, validateSecrets } from './secret-validation.js';
+import { chunk, validateSecrets } from '@/lib/secret-validation'
 
-type Scope = { organisation?: string; workspace: string; environment: string };
+type Scope = { organisation?: string; workspace: string; environment: string }
 
 /** What a provisioning pass did, so the caller can report it honestly. */
 export type ProvisionResult = {
-  createdWorkspace: boolean;
-  createdEnvironment: boolean;
-  created: number;
-  updated: number;
-};
+  createdWorkspace: boolean
+  createdEnvironment: boolean
+  created: number
+  updated: number
+}
 
 /**
  * Creates the workspace and environment a binding names, if they are missing.
@@ -25,19 +25,19 @@ export type ProvisionResult = {
  * is safe to re-run over a partially provisioned project.
  */
 export type ScopeCache = {
-  workspaces?: Set<string>;
-  environments: Map<string, Set<string>>;
-};
+  workspaces?: Set<string>
+  environments: Map<string, Set<string>>
+}
 
 /** Fresh cache for one provisioning run. */
 export function newScopeCache(): ScopeCache {
-  return { environments: new Map() };
+  return { environments: new Map() }
 }
 
-type SlugList = Array<{ slug: string }> | { data?: Array<{ slug: string }> };
+type SlugList = Array<{ slug: string }> | { data?: Array<{ slug: string }> }
 
 function slugs(list: SlugList): Set<string> {
-  return new Set((Array.isArray(list) ? list : list.data ?? []).map((item) => item.slug));
+  return new Set((Array.isArray(list) ? list : (list.data ?? [])).map((item) => item.slug))
 }
 
 /**
@@ -46,11 +46,17 @@ function slugs(list: SlugList): Set<string> {
  * read endpoints before moving a single secret, which on a loaded API is
  * twenty-four chances to fail.
  */
-export async function knownWorkspaces(client: CryptFlare, org: string | undefined, cache: ScopeCache): Promise<Set<string>> {
+export async function knownWorkspaces(
+  client: CryptFlare,
+  org: string | undefined,
+  cache: ScopeCache,
+): Promise<Set<string>> {
   if (!cache.workspaces) {
-    cache.workspaces = slugs((await client.workspaces.list({ ...(org ? { organisation: org } : {}) })) as SlugList);
+    cache.workspaces = slugs(
+      await client.workspaces.list({ ...(org ? { organisation: org } : {}) }),
+    )
   }
-  return cache.workspaces;
+  return cache.workspaces
 }
 
 /** The environments of a workspace that exists, listed once per run. */
@@ -60,12 +66,14 @@ export async function knownEnvironments(
   workspace: string,
   cache: ScopeCache,
 ): Promise<Set<string>> {
-  let known = cache.environments.get(workspace);
+  let known = cache.environments.get(workspace)
   if (!known) {
-    known = slugs((await client.environments.list({ ...(org ? { organisation: org } : {}), workspace })) as SlugList);
-    cache.environments.set(workspace, known);
+    known = slugs(
+      await client.environments.list({ ...(org ? { organisation: org } : {}), workspace }),
+    )
+    cache.environments.set(workspace, known)
   }
-  return known;
+  return known
 }
 
 export async function ensureScope(
@@ -73,10 +81,11 @@ export async function ensureScope(
   scope: Scope,
   cache: ScopeCache = newScopeCache(),
 ): Promise<{ createdWorkspace: boolean; createdEnvironment: boolean }> {
-  const org = scope.organisation;
-  const wsList = [...(await knownWorkspaces(client, org, cache))].map((slug) => ({ slug }));
+  const org = scope.organisation
+  const workspaces = await knownWorkspaces(client, org, cache)
+  const wsList = [...workspaces].map((slug) => ({ slug }))
 
-  let createdWorkspace = false;
+  let createdWorkspace = false
   if (!wsList.some((w) => w.slug === scope.workspace)) {
     await client.workspaces.create({
       ...(org ? { organisation: org } : {}),
@@ -85,30 +94,31 @@ export async function ensureScope(
       // rather than inventing a prettier name that then disagrees with it.
       name: scope.workspace,
       slug: scope.workspace,
-    });
-    createdWorkspace = true;
+    })
+    createdWorkspace = true
     // Record it so a later binding in the same run does not re-create or
     // re-list it, and so a freshly created workspace is known immediately -
     // D1 reads are eventually consistent, so re-listing could miss it.
-    cache.workspaces!.add(scope.workspace);
-    cache.environments.set(scope.workspace, new Set());
+    workspaces.add(scope.workspace)
+    cache.environments.set(scope.workspace, new Set())
   }
 
-  const envList = [...(await knownEnvironments(client, org, scope.workspace, cache))].map((slug) => ({ slug }));
+  const environments = await knownEnvironments(client, org, scope.workspace, cache)
+  const envList = [...environments].map((slug) => ({ slug }))
 
-  let createdEnvironment = false;
+  let createdEnvironment = false
   if (!envList.some((e) => e.slug === scope.environment)) {
     await client.environments.create({
       ...(org ? { organisation: org } : {}),
       workspace: scope.workspace,
       name: scope.environment,
       slug: scope.environment,
-    });
-    createdEnvironment = true;
-    cache.environments.get(scope.workspace)!.add(scope.environment);
+    })
+    createdEnvironment = true
+    environments.add(scope.environment)
   }
 
-  return { createdWorkspace, createdEnvironment };
+  return { createdWorkspace, createdEnvironment }
 }
 
 /**
@@ -123,39 +133,39 @@ export async function seedFromValues(
   scope: Scope,
   values: Map<string, string>,
 ): Promise<{ created: number; updated: number }> {
-  if (values.size === 0) return { created: 0, updated: 0 };
+  if (values.size === 0) return { created: 0, updated: 0 }
 
-  const problems = validateSecrets(values);
+  const problems = validateSecrets(values)
   if (problems.length > 0) {
-    const detail = problems.map((p) => `${p.key}: ${p.reason}`).join('; ');
-    throw new Error(`${problems.length} invalid secret(s), nothing pushed - ${detail}`);
+    const detail = problems.map((p) => `${p.key}: ${p.reason}`).join('; ')
+    throw new Error(`${problems.length} invalid secret(s), nothing pushed - ${detail}`)
   }
 
-  const remoteKeys = new Set<string>();
-  for await (const secret of await client.secrets.list(scope)) remoteKeys.add(secret.key);
+  const remoteKeys = new Set<string>()
+  for await (const secret of await client.secrets.list(scope)) remoteKeys.add(secret.key)
 
-  const toCreate: Array<{ key: string; value: string }> = [];
-  const toUpdate: Array<{ key: string; value: string }> = [];
+  const toCreate: Array<{ key: string; value: string }> = []
+  const toUpdate: Array<{ key: string; value: string }> = []
   for (const [key, value] of values) {
-    if (remoteKeys.has(key)) toUpdate.push({ key, value });
-    else toCreate.push({ key, value });
+    if (remoteKeys.has(key)) toUpdate.push({ key, value })
+    else toCreate.push({ key, value })
   }
 
-  const failures: string[] = [];
+  const failures: string[] = []
   for (const batch of chunk(toCreate)) {
-    failures.push(...failedItems(await client.secrets.batchCreate({ ...scope, secrets: batch })));
+    failures.push(...failedItems(await client.secrets.batchCreate({ ...scope, secrets: batch })))
   }
   for (const batch of chunk(toUpdate)) {
-    failures.push(...failedItems(await client.secrets.batchUpdate({ ...scope, secrets: batch })));
+    failures.push(...failedItems(await client.secrets.batchUpdate({ ...scope, secrets: batch })))
   }
 
   if (failures.length > 0) {
     // Seeding reported success on the strength of the request being accepted.
     // The server now says what happened to each key, so say it too.
-    throw new Error(`${failures.length} secret(s) were not written - ${failures.join('; ')}`);
+    throw new Error(`${failures.length} secret(s) were not written - ${failures.join('; ')}`)
   }
 
-  return { created: toCreate.length, updated: toUpdate.length };
+  return { created: toCreate.length, updated: toUpdate.length }
 }
 
 /**
@@ -164,9 +174,14 @@ export async function seedFromValues(
  * the next sync pass reconciles the two values.
  */
 function failedItems(response: {
-  results?: Array<{ key: string; status: string; reason?: string; error?: string }> | null;
+  results?: Array<{
+    key: string
+    status: string
+    reason?: string | undefined
+    error?: string | undefined
+  }> | null
 }): string[] {
   return (response.results ?? [])
     .filter((item) => item.status === 'error')
-    .map((item) => `${item.key}: ${item.error ?? item.reason ?? 'not written'}`);
+    .map((item) => `${item.key}: ${item.error ?? item.reason ?? 'not written'}`)
 }

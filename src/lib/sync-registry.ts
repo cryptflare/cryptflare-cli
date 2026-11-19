@@ -11,18 +11,19 @@
  * JSON parse error at 3am on a machine you are not sitting in front of.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname, join, resolve, isAbsolute } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
+import { dirname, join, resolve, isAbsolute } from 'node:path'
 
-import { readCaptureMode, type CaptureMode } from './capture.js';
-import { getConfigPath } from './config.js';
+import { readCaptureMode, type CaptureMode } from '@/lib/capture'
+import { getConfigPath } from '@/lib/config'
+import { errorMessage, isRecord, isStringArray } from '@/lib/guards'
 
 /** One `.env`-shaped file bound to one remote environment, optionally scoped to a pod. */
 export type SyncBinding = {
   /** Path to the env file, relative to the project root (e.g. `.env.local`). */
-  file: string;
+  file: string
   /** Environment slug in the bound workspace. */
-  environment: string;
+  environment: string
   /**
    * Pod (secret folder) within the environment. Omitted means the root pod.
    *
@@ -32,7 +33,7 @@ export type SyncBinding = {
    * one another. A pod per app keeps them separate without inventing an
    * environment per app.
    */
-  pod?: string;
+  pod?: string
   /**
    * Workspace slug for this binding, overriding the project's.
    *
@@ -41,35 +42,35 @@ export type SyncBinding = {
    * scoped per workspace. Without this, every app in one repository would need
    * its own registered project pointing at the same directory.
    */
-  workspace?: string;
+  workspace?: string
   /**
    * What to do with a key that is in the file but not in CryptFlare yet.
    * Omitted means `off`: report it and never create it. See `./capture.ts`.
    */
-  capture?: CaptureMode;
-};
+  capture?: CaptureMode
+}
 
 export type SyncProject = {
   /** Stable identifier used in log lines, state keys, and `cf sync remove`. */
-  id: string;
+  id: string
   /** Absolute path to the project root. */
-  path: string;
+  path: string
   /** Organisation ID. Falls back to the CLI default when omitted. */
-  org?: string;
+  org?: string
   /**
    * Default workspace for bindings that do not name their own. Optional only
    * when every binding carries a `workspace`; validation enforces that, so a
    * binding can never end up with no workspace at all.
    */
-  workspace?: string;
+  workspace?: string
   /** `false` parks the project without deleting its config. */
-  enabled: boolean;
-  bindings: SyncBinding[];
-};
+  enabled: boolean
+  bindings: SyncBinding[]
+}
 
 export type SyncRegistry = {
-  version: 1;
-  projects: SyncProject[];
+  version: 1
+  projects: SyncProject[]
   /**
    * Directories whose repositories are set up automatically. Any git
    * repository found under one of these that has env files, and is not
@@ -77,58 +78,60 @@ export type SyncRegistry = {
    * being asked about. Absent or empty means nothing is ever set up on its
    * own. See `./auto-onboard.ts`.
    */
-  roots?: string[];
-};
+  roots?: string[]
+}
 
-const REGISTRY_VERSION = 1;
+const REGISTRY_VERSION = 1
 
 export function getRegistryPath(): string {
-  return join(dirname(getConfigPath()), 'sync.json');
+  return join(dirname(getConfigPath()), 'sync.json')
 }
 
 export function emptyRegistry(): SyncRegistry {
-  return { version: REGISTRY_VERSION, projects: [] };
+  return { version: REGISTRY_VERSION, projects: [] }
 }
 
 export class RegistryError extends Error {
   constructor(message: string) {
-    super(message);
-    this.name = 'RegistryError';
+    super(message)
+    this.name = 'RegistryError'
   }
 }
 
 function assertString(value: unknown, path: string): string {
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new RegistryError(`${path} must be a non-empty string (got ${JSON.stringify(value)})`);
+    throw new RegistryError(`${path} must be a non-empty string (got ${JSON.stringify(value)})`)
   }
-  return value;
+  return value
 }
 
 function parseBinding(raw: unknown, path: string): SyncBinding {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new RegistryError(`${path} must be an object`);
+  if (!isRecord(raw)) {
+    throw new RegistryError(`${path} must be an object`)
   }
-  const obj = raw as Record<string, unknown>;
-  const file = assertString(obj['file'], `${path}.file`);
+  const obj = raw
+  const file = assertString(obj['file'], `${path}.file`)
   if (isAbsolute(file) || file.split(/[\\/]/).includes('..')) {
     // Bindings resolve against the project root. Allowing `..` or an absolute
     // path would let a registry entry write anywhere on the filesystem, which
     // is a needlessly large blast radius for a background service.
-    throw new RegistryError(`${path}.file must be a relative path inside the project (got "${file}")`);
+    throw new RegistryError(
+      `${path}.file must be a relative path inside the project (got "${file}")`,
+    )
   }
-  const pod = obj['pod'];
+  const pod = obj['pod']
   if (pod !== undefined && (typeof pod !== 'string' || pod.trim() === '')) {
-    throw new RegistryError(`${path}.pod must be a non-empty string when present`);
+    throw new RegistryError(`${path}.pod must be a non-empty string when present`)
   }
-  const workspace = obj['workspace'];
+  const workspace = obj['workspace']
   if (workspace !== undefined && (typeof workspace !== 'string' || workspace.trim() === '')) {
-    throw new RegistryError(`${path}.workspace must be a non-empty string when present`);
+    throw new RegistryError(`${path}.workspace must be a non-empty string when present`)
   }
-  let capture: CaptureMode | undefined;
+  let capture: CaptureMode | undefined
   try {
-    capture = readCaptureMode(obj['capture'], `${path}.capture`);
+    capture = readCaptureMode(obj['capture'], `${path}.capture`)
   } catch (err) {
-    throw new RegistryError((err as Error).message);
+    throw new RegistryError(errorMessage(err))
   }
   return {
     file,
@@ -136,40 +139,40 @@ function parseBinding(raw: unknown, path: string): SyncBinding {
     ...(typeof pod === 'string' ? { pod } : {}),
     ...(typeof workspace === 'string' ? { workspace } : {}),
     ...(capture ? { capture } : {}),
-  };
+  }
 }
 
 function parseProject(raw: unknown, path: string): SyncProject {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new RegistryError(`${path} must be an object`);
+  if (!isRecord(raw)) {
+    throw new RegistryError(`${path} must be an object`)
   }
-  const obj = raw as Record<string, unknown>;
-  const bindingsRaw = obj['bindings'];
+  const obj = raw
+  const bindingsRaw = obj['bindings']
   if (!Array.isArray(bindingsRaw) || bindingsRaw.length === 0) {
-    throw new RegistryError(`${path}.bindings must be a non-empty array`);
+    throw new RegistryError(`${path}.bindings must be a non-empty array`)
   }
-  const org = obj['org'];
+  const org = obj['org']
   if (org !== undefined && typeof org !== 'string') {
-    throw new RegistryError(`${path}.org must be a string when present`);
+    throw new RegistryError(`${path}.org must be a string when present`)
   }
 
-  const bindings = bindingsRaw.map((b, i) => parseBinding(b, `${path}.bindings[${i}]`));
+  const bindings = bindingsRaw.map((b, i) => parseBinding(b, `${path}.bindings[${i}]`))
 
   // The project-level workspace is a default, so it may be omitted - but only
   // if every binding supplies its own. Checked here rather than at sync time so
   // a registry that cannot resolve a workspace fails on load, naming the
   // binding, instead of mid-pass against a live API.
-  const workspace = obj['workspace'];
+  const workspace = obj['workspace']
   if (workspace !== undefined && (typeof workspace !== 'string' || workspace.trim() === '')) {
-    throw new RegistryError(`${path}.workspace must be a non-empty string when present`);
+    throw new RegistryError(`${path}.workspace must be a non-empty string when present`)
   }
   if (workspace === undefined) {
-    const orphan = bindings.findIndex((b) => !b.workspace);
+    const orphan = bindings.findIndex((b) => !b.workspace)
     if (orphan !== -1) {
       throw new RegistryError(
         `${path}.bindings[${orphan}] has no workspace and ${path} sets no default. ` +
           `Add a workspace to the binding, or a project-level "workspace".`,
-      );
+      )
     }
   }
 
@@ -180,24 +183,26 @@ function parseProject(raw: unknown, path: string): SyncProject {
     ...(typeof workspace === 'string' ? { workspace } : {}),
     enabled: obj['enabled'] !== false,
     bindings,
-  };
+  }
 }
 
 export function parseRegistry(raw: unknown): SyncRegistry {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new RegistryError('registry root must be an object');
+  if (!isRecord(raw)) {
+    throw new RegistryError('registry root must be an object')
   }
-  const obj = raw as Record<string, unknown>;
+  const obj = raw
   if (obj['version'] !== REGISTRY_VERSION) {
-    throw new RegistryError(`unsupported registry version ${String(obj['version'])}; expected ${REGISTRY_VERSION}`);
+    throw new RegistryError(
+      `unsupported registry version ${String(obj['version'])}; expected ${REGISTRY_VERSION}`,
+    )
   }
-  const projectsRaw = obj['projects'];
+  const projectsRaw = obj['projects']
   if (!Array.isArray(projectsRaw)) {
-    throw new RegistryError('registry.projects must be an array');
+    throw new RegistryError('registry.projects must be an array')
   }
-  const projects = projectsRaw.map((p, i) => parseProject(p, `projects[${i}]`));
+  const projects = projectsRaw.map((p, i) => parseProject(p, `projects[${i}]`))
 
-  const seen = new Set<string>();
+  const seen = new Set<string>()
   // Absolute path -> the project that claimed it. Two projects binding one
   // file is the same hazard as one project binding it twice, but it slipped
   // through: the per-project check below only sees relative paths within a
@@ -205,76 +210,79 @@ export function parseRegistry(raw: unknown): SyncRegistry {
   // `peak-physique` both owning apps/blog/.env at the same directory, which
   // gives that file two independent merge bases. Each pass then processes it
   // twice, and a write by one is read as a local edit by the other.
-  const claimedPaths = new Map<string, string>();
+  const claimedPaths = new Map<string, string>()
 
   for (const project of projects) {
     if (seen.has(project.id)) {
-      throw new RegistryError(`duplicate project id "${project.id}"`);
+      throw new RegistryError(`duplicate project id "${project.id}"`)
     }
-    seen.add(project.id);
+    seen.add(project.id)
 
-    const files = new Set<string>();
+    const files = new Set<string>()
     for (const binding of project.bindings) {
       if (files.has(binding.file)) {
         // Two bindings for one file means two environments racing to own the
         // same bytes. Reject at load rather than let the daemon flap.
-        throw new RegistryError(`project "${project.id}" binds ${binding.file} more than once`);
+        throw new RegistryError(`project "${project.id}" binds ${binding.file} more than once`)
       }
-      files.add(binding.file);
+      files.add(binding.file)
 
-      const absolute = bindingFilePath(project, binding);
-      const owner = claimedPaths.get(absolute);
+      const absolute = bindingFilePath(project, binding)
+      const owner = claimedPaths.get(absolute)
       if (owner !== undefined) {
         throw new RegistryError(
-          `projects "${owner}" and "${project.id}" both bind ${absolute}. `
-            + `One file cannot have two merge bases - remove one with \`cf sync remove\`.`,
-        );
+          `projects "${owner}" and "${project.id}" both bind ${absolute}. ` +
+            `One file cannot have two merge bases - remove one with \`cf sync remove\`.`,
+        )
       }
-      claimedPaths.set(absolute, project.id);
+      claimedPaths.set(absolute, project.id)
     }
   }
 
-  const rootsRaw = obj['roots'];
-  if (rootsRaw !== undefined && (!Array.isArray(rootsRaw) || rootsRaw.some((root) => typeof root !== 'string' || !isAbsolute(root)))) {
-    throw new RegistryError('registry.roots must be an array of absolute directory paths');
+  const rootsRaw = obj['roots']
+  if (
+    rootsRaw !== undefined &&
+    (!isStringArray(rootsRaw) || rootsRaw.some((root) => !isAbsolute(root)))
+  ) {
+    throw new RegistryError('registry.roots must be an array of absolute directory paths')
   }
-  const roots = rootsRaw === undefined ? [] : [...new Set((rootsRaw as string[]).map((root) => resolve(root)))];
+  const roots = rootsRaw === undefined ? [] : [...new Set(rootsRaw.map((root) => resolve(root)))]
 
-  return { version: REGISTRY_VERSION, projects, ...(roots.length > 0 ? { roots } : {}) };
+  return { version: REGISTRY_VERSION, projects, ...(roots.length > 0 ? { roots } : {}) }
 }
 
 export function loadRegistry(path = getRegistryPath()): SyncRegistry {
-  if (!existsSync(path)) return emptyRegistry();
-  let raw: unknown;
+  if (!existsSync(path)) return emptyRegistry()
+  let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(path, 'utf-8'));
+    raw = JSON.parse(readFileSync(path, 'utf-8'))
   } catch (err) {
-    throw new RegistryError(`${path} is not valid JSON: ${(err as Error).message}`);
+    throw new RegistryError(`${path} is not valid JSON: ${errorMessage(err)}`)
   }
   try {
-    return parseRegistry(raw);
+    return parseRegistry(raw)
   } catch (err) {
-    throw new RegistryError(`${path}: ${(err as Error).message}`);
+    throw new RegistryError(`${path}: ${errorMessage(err)}`)
   }
 }
 
 export function saveRegistry(registry: SyncRegistry, path = getRegistryPath()): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const body = `${JSON.stringify(registry, null, 2)}\n`;
-  const tmp = `${path}.tmp-${process.pid}`;
+  mkdirSync(dirname(path), { recursive: true })
+  const body = `${JSON.stringify(registry, null, 2)}\n`
+  const tmp = `${path}.tmp-${process.pid}`
   // 0600: the registry names workspaces and environments. Not secret material,
   // but it maps this machine's directories to vault scopes - no reason for it
   // to be world-readable.
-  writeFileSync(tmp, body, { encoding: 'utf-8', mode: 0o600 });
-  renameSync(tmp, path);
+  writeFileSync(tmp, body, { encoding: 'utf-8', mode: 0o600 })
+  renameSync(tmp, path)
 }
 
 /** Absolute path of a binding's env file. */
 export function bindingFilePath(project: SyncProject, binding: SyncBinding): string {
-  return join(project.path, binding.file);
+  return join(project.path, binding.file)
 }
 
 /** Stable key for state lookups and log prefixes. */
 export function bindingKey(project: SyncProject, binding: SyncBinding): string {
-  return `${project.id}::${binding.file}`;
+  return `${project.id}::${binding.file}`
 }

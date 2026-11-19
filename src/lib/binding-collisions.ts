@@ -15,22 +15,22 @@
  * do.
  */
 
-import { MANIFEST_FILENAME } from './project-manifest.js';
+import { MANIFEST_FILENAME } from '@/lib/project-manifest'
 
 /** The fields of a binding that decide where its secrets live. */
 export type BoundFile = {
-  file: string;
-  workspace?: string | undefined;
-  environment?: string | undefined;
-  pod?: string | undefined;
-};
+  file: string
+  workspace?: string | undefined
+  environment?: string | undefined
+  pod?: string | undefined
+}
 
 export type BindingCollision = {
   /** `workspace/environment`, with `/pod` when one is named. */
-  target: string;
+  target: string
   /** Every file bound there, in the order they were listed. Always two or more. */
-  files: string[];
-};
+  files: string[]
+}
 
 /**
  * @param bindings The bindings of one project.
@@ -40,38 +40,46 @@ export function findBindingCollisions(
   bindings: readonly BoundFile[],
   defaultWorkspace?: string | undefined,
 ): BindingCollision[] {
-  const byTarget = new Map<string, string[]>();
+  const byTarget = new Map<string, string[]>()
   for (const binding of bindings) {
     const target = [binding.workspace ?? defaultWorkspace ?? '', binding.environment ?? '']
       .concat(binding.pod ? [binding.pod] : [])
-      .join('/');
-    byTarget.set(target, [...(byTarget.get(target) ?? []), binding.file]);
+      .join('/')
+    byTarget.set(target, [...(byTarget.get(target) ?? []), binding.file])
   }
   return [...byTarget]
     .filter(([, files]) => files.length > 1)
-    .map(([target, files]) => ({ target, files }));
+    .map(([target, files]) => ({ target, files }))
 }
 
 /** The files named by any of the collisions. */
 export function collidingFiles(collisions: readonly BindingCollision[]): Set<string> {
-  return new Set(collisions.flatMap((collision) => collision.files));
+  return new Set(collisions.flatMap((collision) => collision.files))
 }
 
 /** One sentence naming every file and the environment they share. */
 export function describeCollision(collision: BindingCollision): string {
-  const names = collision.files.map((file) => `"${file}"`);
-  const list = names.length === 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-  return `${list} are ${names.length === 2 ? 'both' : 'all'} bound to environment ${collision.target}. `
-    + 'Secrets are stored per environment and key, so these files would overwrite each other on every pass. '
-    + `None of them is synced until each has its own environment (or pod) in ${MANIFEST_FILENAME}, `
-    + 'followed by `cf sync init` in the repository.';
+  const names = collision.files.map((file) => `"${file}"`)
+  const list =
+    names.length === 2
+      ? names.join(' and ')
+      : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  return (
+    `${list} are ${names.length === 2 ? 'both' : 'all'} bound to environment ${collision.target}. ` +
+    'Secrets are stored per environment and key, so these files would overwrite each other on every pass. ' +
+    `None of them is synced until each has its own environment (or pod) in ${MANIFEST_FILENAME}, ` +
+    'followed by `cf sync init` in the repository.'
+  )
 }
 
 /**
  * Throws when bindings collide. For the places where bindings are being
  * added by a person, and refusing the whole change is the clear answer.
  */
-export function assertNoBindingCollisions(bindings: readonly BoundFile[], defaultWorkspace?: string | undefined): void {
-  const collisions = findBindingCollisions(bindings, defaultWorkspace);
-  if (collisions.length > 0) throw new Error(collisions.map(describeCollision).join('\n'));
+export function assertNoBindingCollisions(
+  bindings: readonly BoundFile[],
+  defaultWorkspace?: string | undefined,
+): void {
+  const collisions = findBindingCollisions(bindings, defaultWorkspace)
+  if (collisions.length > 0) throw new Error(collisions.map(describeCollision).join('\n'))
 }

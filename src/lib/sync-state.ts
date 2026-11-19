@@ -25,39 +25,57 @@
  * being precomputable or correlatable across machines and backups.
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
-import { getConfigPath } from './config.js';
+import { getConfigPath } from '@/lib/config'
+import { isRecord } from '@/lib/guards'
 
 export type KeyState = {
   /** Version seen in `secrets.list` at the end of the last successful pass. */
-  remoteVersion: number;
+  remoteVersion: number
   /** HMAC of the local value at the end of the last successful pass. */
-  localMac: string;
-};
+  localMac: string
+}
 
 export type BindingState = {
-  lastSyncAt: string;
-  keys: Record<string, KeyState>;
-};
+  lastSyncAt: string
+  keys: Record<string, KeyState>
+}
 
 export type SyncState = {
-  version: 1;
+  version: 1
   /** Hex salt for the local-value HMAC. Rotating it forces a full re-baseline. */
-  salt: string;
-  bindings: Record<string, BindingState>;
-};
+  salt: string
+  bindings: Record<string, BindingState>
+}
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 1
+
+function isKeyState(value: unknown): value is KeyState {
+  return (
+    isRecord(value) &&
+    typeof value['remoteVersion'] === 'number' &&
+    typeof value['localMac'] === 'string'
+  )
+}
+
+function isBindingState(value: unknown): value is BindingState {
+  return (
+    isRecord(value) &&
+    typeof value['lastSyncAt'] === 'string' &&
+    isRecord(value['keys']) &&
+    Object.values(value['keys']).every(isKeyState)
+  )
+}
 
 export function getStatePath(): string {
-  return join(dirname(getConfigPath()), 'sync-state.json');
+  return join(dirname(getConfigPath()), 'sync-state.json')
 }
 
 export function emptyState(): SyncState {
-  return { version: STATE_VERSION, salt: randomBytes(32).toString('hex'), bindings: {} };
+  return { version: STATE_VERSION, salt: randomBytes(32).toString('hex'), bindings: {} }
 }
 
 /**
@@ -68,31 +86,42 @@ export function emptyState(): SyncState {
  * re-baselines - whereas a crash loop during a two-week absence is not.
  */
 export function loadState(path = getStatePath()): SyncState {
-  if (!existsSync(path)) return emptyState();
+  if (!existsSync(path)) return emptyState()
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Partial<SyncState>;
-    if (raw.version !== STATE_VERSION || typeof raw.salt !== 'string' || typeof raw.bindings !== 'object') {
-      return emptyState();
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf-8'))
+    if (
+      !isRecord(raw) ||
+      raw['version'] !== STATE_VERSION ||
+      typeof raw['salt'] !== 'string' ||
+      !isRecord(raw['bindings'])
+    ) {
+      return emptyState()
     }
-    return { version: STATE_VERSION, salt: raw.salt, bindings: (raw.bindings ?? {}) as Record<string, BindingState> };
+    const bindings: Record<string, BindingState> = {}
+    for (const [key, value] of Object.entries(raw['bindings'])) {
+      // An entry that does not have the expected shape is dropped, which
+      // re-baselines that one binding instead of discarding the whole file.
+      if (isBindingState(value)) bindings[key] = value
+    }
+    return { version: STATE_VERSION, salt: raw['salt'], bindings }
   } catch {
-    return emptyState();
+    return emptyState()
   }
 }
 
 export function saveState(state: SyncState, path = getStatePath()): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 });
-  renameSync(tmp, path);
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 })
+  renameSync(tmp, path)
 }
 
 export function macValue(salt: string, value: string): string {
-  return createHmac('sha256', Buffer.from(salt, 'hex')).update(value, 'utf-8').digest('hex');
+  return createHmac('sha256', Buffer.from(salt, 'hex')).update(value, 'utf-8').digest('hex')
 }
 
 /** Constant-time compare so state reads are not a timing side channel. */
 export function macMatches(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
+  if (a.length !== b.length) return false
+  return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'))
 }

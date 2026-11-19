@@ -19,94 +19,94 @@
 
 /** One `KEY=value` assignment located in the file. */
 export type EnvEntry = {
-  key: string;
-  value: string;
+  key: string
+  value: string
   /** Index into `ParsedEnvFile.lines` where this assignment lives. */
-  lineIndex: number;
+  lineIndex: number
   /** `export ` prefix, if the line used one. Preserved on rewrite. */
-  exported: boolean;
+  exported: boolean
   /** Leading whitespace on the line. Preserved on rewrite. */
-  indent: string;
+  indent: string
   /** Trailing ` # comment` on an unquoted value. Preserved on rewrite. */
-  trailingComment: string;
+  trailingComment: string
   /**
    * `true` when the value opened a quote that never closed on the same line.
    * Such keys are excluded from sync - see the module comment.
    */
-  multiline: boolean;
-};
+  multiline: boolean
+}
 
 export type ParsedEnvFile = {
   /** Raw file split on `\n`, no trailing-newline normalisation. */
-  lines: string[];
+  lines: string[]
   /** Last assignment wins, matching dotenv/shell semantics. */
-  entries: Map<string, EnvEntry>;
+  entries: Map<string, EnvEntry>
   /** `true` when the source content ended with a newline. */
-  trailingNewline: boolean;
-};
+  trailingNewline: boolean
+}
 
-const ASSIGNMENT_RE = /^(\s*)(export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=(.*)$/;
+const ASSIGNMENT_RE = /^(\s*)(export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=(.*)$/
 
 /** Header for the block where keys new to this file get appended. */
-export const MANAGED_BLOCK_HEADER = '# --- managed by CryptFlare (cf sync) ---';
+export const MANAGED_BLOCK_HEADER = '# --- managed by CryptFlare (cf sync) ---'
 
 /**
  * Splits a raw right-hand side into its value plus any preserved trailing
  * comment, and reports whether the quoting ran off the end of the line.
  */
 function readValue(rhs: string): { value: string; trailingComment: string; multiline: boolean } {
-  const trimmed = rhs.trim();
+  const trimmed = rhs.trim()
 
   if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
-    const quote = trimmed[0]!;
+    const quote = trimmed.charAt(0)
     // Walk the rest looking for the closing quote, honouring backslash escapes
     // inside double quotes only (single quotes are literal in shell/dotenv).
-    let i = 1;
-    let out = '';
+    let i = 1
+    let out = ''
     while (i < trimmed.length) {
-      const ch = trimmed[i]!;
+      const ch = trimmed.charAt(i)
       if (quote === '"' && ch === '\\' && i + 1 < trimmed.length) {
-        const next = trimmed[i + 1]!;
-        out += next === 'n' ? '\n' : next === 't' ? '\t' : next;
-        i += 2;
-        continue;
+        const next = trimmed.charAt(i + 1)
+        out += next === 'n' ? '\n' : next === 't' ? '\t' : next
+        i += 2
+        continue
       }
       if (ch === quote) {
-        return { value: out, trailingComment: trimmed.slice(i + 1).trimEnd(), multiline: false };
+        return { value: out, trailingComment: trimmed.slice(i + 1).trimEnd(), multiline: false }
       }
-      out += ch;
-      i++;
+      out += ch
+      i++
     }
-    return { value: out, trailingComment: '', multiline: true };
+    return { value: out, trailingComment: '', multiline: true }
   }
 
   // Unquoted: a `#` only begins a comment when it follows whitespace, so
   // `PASSWORD=abc#123` keeps the hash as part of the value.
-  const hashIdx = trimmed.search(/\s#/);
+  const hashIdx = trimmed.search(/\s#/)
   if (hashIdx !== -1) {
     return {
       value: trimmed.slice(0, hashIdx).trimEnd(),
       trailingComment: trimmed.slice(hashIdx).trim(),
       multiline: false,
-    };
+    }
   }
-  return { value: trimmed, trailingComment: '', multiline: false };
+  return { value: trimmed, trailingComment: '', multiline: false }
 }
 
 export function parseEnvContent(content: string): ParsedEnvFile {
-  const trailingNewline = content.endsWith('\n');
-  const lines = (trailingNewline ? content.slice(0, -1) : content).split('\n');
-  const entries = new Map<string, EnvEntry>();
+  const trailingNewline = content.endsWith('\n')
+  const lines = (trailingNewline ? content.slice(0, -1) : content).split('\n')
+  const entries = new Map<string, EnvEntry>()
 
   lines.forEach((line, lineIndex) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) return
 
-    const match = ASSIGNMENT_RE.exec(line);
-    if (!match) return;
+    const match = ASSIGNMENT_RE.exec(line)
+    if (!match) return
 
-    const [, indent = '', exportPrefix, key = '', rhs = ''] = match;
-    const { value, trailingComment, multiline } = readValue(rhs);
+    const [, indent = '', exportPrefix, key = '', rhs = ''] = match
+    const { value, trailingComment, multiline } = readValue(rhs)
 
     entries.set(key, {
       key,
@@ -116,10 +116,10 @@ export function parseEnvContent(content: string): ParsedEnvFile {
       indent,
       trailingComment,
       multiline,
-    });
-  });
+    })
+  })
 
-  return { lines, entries, trailingNewline };
+  return { lines, entries, trailingNewline }
 }
 
 /**
@@ -140,7 +140,7 @@ export function parseEnvContent(content: string): ParsedEnvFile {
  * this parser and a shell both undo.
  */
 function renderValue(value: string): string {
-  if (value === '') return "''";
+  if (value === '') return "''"
 
   if (value.includes("'") || value.includes('\n')) {
     const escaped = value
@@ -148,18 +148,21 @@ function renderValue(value: string): string {
       .replace(/"/g, '\\"')
       .replace(/\$/g, '\\$')
       .replace(/`/g, '\\`')
-      .replace(/\n/g, '\\n');
-    return `"${escaped}"`;
+      .replace(/\n/g, '\\n')
+    return `"${escaped}"`
   }
 
-  if (/[\s#"=$`\\]/.test(value)) return `'${value}'`;
-  return value;
+  if (/[\s#"=$`\\]/.test(value)) return `'${value}'`
+  return value
 }
 
-function renderLine(entry: Pick<EnvEntry, 'indent' | 'exported' | 'key' | 'trailingComment'>, value: string): string {
-  const prefix = `${entry.indent}${entry.exported ? 'export ' : ''}`;
-  const comment = entry.trailingComment ? ` ${entry.trailingComment}` : '';
-  return `${prefix}${entry.key}=${renderValue(value)}${comment}`;
+function renderLine(
+  entry: Pick<EnvEntry, 'indent' | 'exported' | 'key' | 'trailingComment'>,
+  value: string,
+): string {
+  const prefix = `${entry.indent}${entry.exported ? 'export ' : ''}`
+  const comment = entry.trailingComment ? ` ${entry.trailingComment}` : ''
+  return `${prefix}${entry.key}=${renderValue(value)}${comment}`
 }
 
 /**
@@ -179,39 +182,41 @@ export function applyEnvChanges(
   updates: Map<string, string>,
   additions: Map<string, string> = new Map(),
 ): { content: string; skippedMultiline: string[] } {
-  const parsed = parseEnvContent(content);
-  const lines = [...parsed.lines];
-  const skippedMultiline: string[] = [];
+  const parsed = parseEnvContent(content)
+  const lines = [...parsed.lines]
+  const skippedMultiline: string[] = []
 
   for (const [key, value] of updates) {
-    const entry = parsed.entries.get(key);
-    if (!entry) continue;
+    const entry = parsed.entries.get(key)
+    if (!entry) continue
     if (entry.multiline) {
-      skippedMultiline.push(key);
-      continue;
+      skippedMultiline.push(key)
+      continue
     }
-    if (entry.value === value) continue;
-    lines[entry.lineIndex] = renderLine(entry, value);
+    if (entry.value === value) continue
+    lines[entry.lineIndex] = renderLine(entry, value)
   }
 
-  const newKeys = [...additions.entries()].filter(([key]) => !parsed.entries.has(key));
+  const newKeys = [...additions.entries()].filter(([key]) => !parsed.entries.has(key))
   if (newKeys.length > 0) {
-    let blockIdx = lines.findIndex((l) => l.trim() === MANAGED_BLOCK_HEADER);
+    let blockIdx = lines.findIndex((l) => l.trim() === MANAGED_BLOCK_HEADER)
     if (blockIdx === -1) {
-      if (lines.length > 0 && lines[lines.length - 1]!.trim() !== '') lines.push('');
-      lines.push(MANAGED_BLOCK_HEADER);
-      blockIdx = lines.length - 1;
+      if (lines.length > 0 && (lines.at(-1) ?? '').trim() !== '') lines.push('')
+      lines.push(MANAGED_BLOCK_HEADER)
+      blockIdx = lines.length - 1
     }
     // Insert directly after the header so the block stays contiguous even when
     // the file has content below it.
     const rendered = newKeys
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => renderLine({ indent: '', exported: false, key, trailingComment: '' }, value));
-    lines.splice(blockIdx + 1, 0, ...rendered);
+      .map(([key, value]) =>
+        renderLine({ indent: '', exported: false, key, trailingComment: '' }, value),
+      )
+    lines.splice(blockIdx + 1, 0, ...rendered)
   }
 
-  const body = lines.join('\n');
-  return { content: parsed.trailingNewline || body === '' ? `${body}\n` : body, skippedMultiline };
+  const body = lines.join('\n')
+  return { content: parsed.trailingNewline || body === '' ? `${body}\n` : body, skippedMultiline }
 }
 
 /**
@@ -219,21 +224,21 @@ export function applyEnvChanges(
  * not exist yet - once it exists, {@link applyEnvChanges} takes over.
  */
 export function renderEnvFile(secrets: Map<string, string>, header?: string): string {
-  const lines: string[] = [];
-  if (header) lines.push(header, '');
+  const lines: string[] = []
+  if (header) lines.push(header, '')
   for (const [key, value] of [...secrets.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    lines.push(`${key}=${renderValue(value)}`);
+    lines.push(`${key}=${renderValue(value)}`)
   }
-  lines.push('');
-  return lines.join('\n');
+  lines.push('')
+  return lines.join('\n')
 }
 
 /** Flat key/value view, dropping multi-line entries the writer cannot manage. */
 export function toValueMap(parsed: ParsedEnvFile): Map<string, string> {
-  const map = new Map<string, string>();
+  const map = new Map<string, string>()
   for (const [key, entry] of parsed.entries) {
-    if (entry.multiline) continue;
-    map.set(key, entry.value);
+    if (entry.multiline) continue
+    map.set(key, entry.value)
   }
-  return map;
+  return map
 }

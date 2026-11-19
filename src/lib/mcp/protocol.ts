@@ -11,13 +11,14 @@
  * value and diagnostics go to stderr.
  */
 
-import { createInterface } from 'node:readline';
-import type { Readable, Writable } from 'node:stream';
+import { createInterface } from 'node:readline'
+import type { Readable, Writable } from 'node:stream'
+import { errorMessage, isOneOf, readNumber } from '@/lib/guards'
 
 /** Protocol revisions this server can speak, newest first. */
-export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const;
+export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const
 
-const JSONRPC = '2.0';
+const JSONRPC = '2.0'
 
 /** JSON-RPC 2.0 error codes used here. */
 const ERROR = {
@@ -25,36 +26,40 @@ const ERROR = {
   INVALID_REQUEST: -32600,
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
-} as const;
+} as const
 
-type JsonObject = Record<string, unknown>;
+type JsonObject = Record<string, unknown>
 
 export type JsonRpcResponse =
   | { jsonrpc: typeof JSONRPC; id: string | number | null; result: unknown }
-  | { jsonrpc: typeof JSONRPC; id: string | number | null; error: { code: number; message: string } };
+  | {
+      jsonrpc: typeof JSONRPC
+      id: string | number | null
+      error: { code: number; message: string }
+    }
 
 export type McpTool = {
-  name: string;
-  description: string;
+  name: string
+  description: string
   /** JSON Schema for the tool's arguments. */
-  inputSchema: JsonObject;
+  inputSchema: JsonObject
   /** Returns a JSON-serialisable result. Throw to report a tool error. */
-  run: (args: JsonObject) => Promise<unknown>;
-};
+  run: (args: JsonObject) => Promise<unknown>
+}
 
 export type McpServerOptions = {
-  name: string;
-  version: string;
-  instructions?: string;
-  tools: McpTool[];
-};
+  name: string
+  version: string
+  instructions?: string
+  tools: McpTool[]
+}
 
 function isObject(value: unknown): value is JsonObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function failure(id: string | number | null, code: number, message: string): JsonRpcResponse {
-  return { jsonrpc: JSONRPC, id, error: { code, message } };
+  return { jsonrpc: JSONRPC, id, error: { code, message } }
 }
 
 /**
@@ -62,80 +67,92 @@ function failure(id: string | number | null, code: number, message: string): Jso
  * definition get no reply.
  */
 export function createMcpHandler(options: McpServerOptions) {
-  const tools = new Map(options.tools.map((tool) => [tool.name, tool]));
+  const tools = new Map(options.tools.map((tool) => [tool.name, tool]))
 
   async function callTool(params: unknown): Promise<unknown> {
     if (!isObject(params) || typeof params['name'] !== 'string') {
-      throw Object.assign(new Error('tools/call needs a tool name'), { rpcCode: ERROR.INVALID_PARAMS });
+      throw Object.assign(new Error('tools/call needs a tool name'), {
+        rpcCode: ERROR.INVALID_PARAMS,
+      })
     }
-    const tool = tools.get(params['name']);
+    const tool = tools.get(params['name'])
     if (!tool) {
-      throw Object.assign(new Error(`Unknown tool: ${params['name']}`), { rpcCode: ERROR.INVALID_PARAMS });
+      throw Object.assign(new Error(`Unknown tool: ${params['name']}`), {
+        rpcCode: ERROR.INVALID_PARAMS,
+      })
     }
-    const args = isObject(params['arguments']) ? params['arguments'] : {};
+    const args = isObject(params['arguments']) ? params['arguments'] : {}
 
     try {
-      const result = await tool.run(args);
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      const result = await tool.run(args)
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
     } catch (err) {
       // A tool that fails is a normal outcome the model should read and act
       // on, so it is a result with `isError`, not a protocol error.
       return {
-        content: [{ type: 'text', text: (err as Error).message ?? String(err) }],
+        content: [{ type: 'text', text: errorMessage(err) }],
         isError: true,
-      };
+      }
     }
   }
 
   return async function handle(message: unknown): Promise<JsonRpcResponse | null> {
-    if (!isObject(message) || message['jsonrpc'] !== JSONRPC || typeof message['method'] !== 'string') {
-      return failure(null, ERROR.INVALID_REQUEST, 'Not a JSON-RPC 2.0 request');
+    if (
+      !isObject(message) ||
+      message['jsonrpc'] !== JSONRPC ||
+      typeof message['method'] !== 'string'
+    ) {
+      return failure(null, ERROR.INVALID_REQUEST, 'Not a JSON-RPC 2.0 request')
     }
 
-    const rawId = message['id'];
-    const isNotification = rawId === undefined;
-    const id = typeof rawId === 'string' || typeof rawId === 'number' ? rawId : null;
-    const method = message['method'];
-    const params = message['params'];
+    const rawId = message['id']
+    const isNotification = rawId === undefined
+    const id = typeof rawId === 'string' || typeof rawId === 'number' ? rawId : null
+    const method = message['method']
+    const params = message['params']
 
     try {
-      let result: unknown;
+      let result: unknown
       switch (method) {
         case 'initialize': {
-          const requested = isObject(params) ? params['protocolVersion'] : undefined;
-          const protocolVersion = (SUPPORTED_PROTOCOL_VERSIONS as readonly unknown[]).includes(requested)
+          const requested = isObject(params) ? params['protocolVersion'] : undefined
+          const protocolVersion = isOneOf(SUPPORTED_PROTOCOL_VERSIONS, requested)
             ? requested
-            : SUPPORTED_PROTOCOL_VERSIONS[0];
+            : SUPPORTED_PROTOCOL_VERSIONS[0]
           result = {
             protocolVersion,
             capabilities: { tools: {} },
             serverInfo: { name: options.name, version: options.version },
             ...(options.instructions ? { instructions: options.instructions } : {}),
-          };
-          break;
+          }
+          break
         }
         case 'ping':
-          result = {};
-          break;
+          result = {}
+          break
         case 'tools/list':
           result = {
-            tools: options.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
-          };
-          break;
+            tools: options.tools.map(({ name, description, inputSchema }) => ({
+              name,
+              description,
+              inputSchema,
+            })),
+          }
+          break
         case 'tools/call':
-          result = await callTool(params);
-          break;
+          result = await callTool(params)
+          break
         default:
-          if (isNotification) return null;
-          return failure(id, ERROR.METHOD_NOT_FOUND, `Method not found: ${method}`);
+          if (isNotification) return null
+          return failure(id, ERROR.METHOD_NOT_FOUND, `Method not found: ${method}`)
       }
-      return isNotification ? null : { jsonrpc: JSONRPC, id, result };
+      return isNotification ? null : { jsonrpc: JSONRPC, id, result }
     } catch (err) {
-      if (isNotification) return null;
-      const code = (err as { rpcCode?: number }).rpcCode ?? ERROR.INVALID_PARAMS;
-      return failure(id, code, (err as Error).message ?? 'Request failed');
+      if (isNotification) return null
+      const code = readNumber(err, 'rpcCode') ?? ERROR.INVALID_PARAMS
+      return failure(id, code, errorMessage(err))
     }
-  };
+  }
 }
 
 /**
@@ -150,20 +167,20 @@ export async function serveStdio(
   input: Readable,
   output: Writable,
 ): Promise<void> {
-  const lines = createInterface({ input, crlfDelay: Infinity });
+  const lines = createInterface({ input, crlfDelay: Infinity })
 
   for await (const line of lines) {
-    if (line.trim() === '') continue;
+    if (line.trim() === '') continue
 
-    let message: unknown;
+    let message: unknown
     try {
-      message = JSON.parse(line);
+      message = JSON.parse(line)
     } catch {
-      output.write(`${JSON.stringify(failure(null, ERROR.PARSE, 'Message is not valid JSON'))}\n`);
-      continue;
+      output.write(`${JSON.stringify(failure(null, ERROR.PARSE, 'Message is not valid JSON'))}\n`)
+      continue
     }
 
-    const response = await handle(message);
-    if (response) output.write(`${JSON.stringify(response)}\n`);
+    const response = await handle(message)
+    if (response) output.write(`${JSON.stringify(response)}\n`)
   }
 }

@@ -1,12 +1,12 @@
-import { Command } from 'commander';
-import chalk from 'chalk';
-import { getAllConfig, setDefault, deleteKey, getConfigPath } from '../lib/config.js';
-import * as output from '../lib/output.js';
-import { getRegistryPath } from '../lib/sync-registry.js';
-import { getStatePath } from '../lib/sync-state.js';
+import { Command } from 'commander'
+import chalk from 'chalk'
+import { deleteKey, getAllConfig, getConfigPath, setDefault, UNSETTABLE_KEYS } from '@/lib/config'
+import * as output from '@/lib/output'
+import { getRegistryPath } from '@/lib/sync-registry'
+import { getStatePath } from '@/lib/sync-state'
+import { isRecord } from '@/lib/guards'
 
-export const configCommand = new Command('config')
-  .description('Manage CLI configuration');
+export const configCommand = new Command('config').description('Manage CLI configuration')
 
 /**
  * Replaces the API key with its identifying prefix.
@@ -17,9 +17,9 @@ export const configCommand = new Command('config')
  * tell which token is active. `--reveal` prints it for the cases that need it.
  */
 function maskToken<T extends Record<string, unknown>>(config: T): T {
-  const token = config.token;
-  if (typeof token !== 'string' || token.length === 0) return config;
-  return { ...config, token: `${token.slice(0, 12)}... (${token.length} chars, --reveal to show)` };
+  const token = config.token
+  if (typeof token !== 'string' || token.length === 0) return config
+  return { ...config, token: `${token.slice(0, 12)}... (${token.length} chars, --reveal to show)` }
 }
 
 configCommand
@@ -28,13 +28,13 @@ configCommand
   .option('--json', 'Output as JSON')
   .option('--reveal', 'Print the API token in full instead of masking it')
   .action((opts) => {
-    const config = opts.reveal ? getAllConfig() : maskToken(getAllConfig());
-    if (opts.json) return output.json(config);
+    const config = opts.reveal ? getAllConfig() : maskToken(getAllConfig())
+    if (opts.json) return output.json(config)
 
-    console.log(chalk.dim(`Config file: ${getConfigPath()}`));
-    console.log();
-    console.log(JSON.stringify(config, null, 2));
-  });
+    output.print(chalk.dim(`Config file: ${getConfigPath()}`))
+    output.print()
+    output.print(JSON.stringify(config, null, 2))
+  })
 
 configCommand
   .command('path')
@@ -49,49 +49,52 @@ configCommand
       config: getConfigPath(),
       registry: getRegistryPath(),
       state: getStatePath(),
-    };
-    if (opts.json) return output.json(paths);
+    }
+    if (opts.json) return output.json(paths)
 
-    console.log(`  ${chalk.dim('config')}    ${paths.config}`);
-    console.log(`  ${chalk.dim('registry')}  ${paths.registry}`);
-    console.log(`  ${chalk.dim('state')}     ${paths.state}`);
-  });
+    output.print(`  ${chalk.dim('config')}    ${paths.config}`)
+    output.print(`  ${chalk.dim('registry')}  ${paths.registry}`)
+    output.print(`  ${chalk.dim('state')}     ${paths.state}`)
+  })
 
 configCommand
   .command('get <key>')
   .description('Get a configuration value')
   .option('--reveal', 'Print the API token in full instead of masking it')
   .action((key: string, opts) => {
-    const config = opts.reveal ? getAllConfig() : maskToken(getAllConfig());
-    const keys = key.split('.');
-    let value: unknown = config;
+    const config = opts.reveal ? getAllConfig() : maskToken(getAllConfig())
+    const keys = key.split('.')
+    let value: unknown = config
     for (const k of keys) {
-      if (value && typeof value === 'object' && k in value) {
-        value = (value as Record<string, unknown>)[k];
+      if (isRecord(value) && k in value) {
+        value = value[k]
       } else {
-        console.log(chalk.dim('(not set)'));
-        return;
+        output.print(chalk.dim('(not set)'))
+        return
       }
     }
     // `String(anObject)` is "[object Object]", which is what `cf config get
     // permissions` and `cf config get defaults` printed - the two keys whose
     // values are objects, so the command was useless for exactly the cases
     // where you most want to read the config.
-    console.log(typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : String(value));
-  });
+    output.print(
+      typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : String(value),
+    )
+  })
 
 configCommand
   .command('set <key> <value>')
   .description('Set a configuration value')
   .action((key: string, value: string) => {
-    setDefault(key, value);
-    output.success(`Set ${chalk.bold(key)} = ${value}`);
-  });
+    setDefault(key, value)
+    output.success(`Set ${chalk.bold(key)} = ${value}`)
+  })
 
 configCommand
   .command('unset <key>')
   .description('Remove a configuration value')
   .action((key: string) => {
-    deleteKey(key);
-    output.success(`Removed ${chalk.bold(key)}`);
-  });
+    if (!deleteKey(key))
+      output.usageError(`Unknown setting "${key}".`, `Settings: ${UNSETTABLE_KEYS.join(', ')}`)
+    output.success(`Removed ${chalk.bold(key)}`)
+  })

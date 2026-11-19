@@ -13,14 +13,16 @@
  * `auto` on per binding, for the environments where that is what you want -
  * typically a personal or development environment, not production.
  */
-export const CAPTURE_MODES = ['off', 'prompt', 'auto'] as const;
 
-export type CaptureMode = (typeof CAPTURE_MODES)[number];
+import { isOneOf } from '@/lib/guards'
+export const CAPTURE_MODES = ['off', 'prompt', 'auto'] as const
 
-export const DEFAULT_CAPTURE_MODE: CaptureMode = 'off';
+export type CaptureMode = (typeof CAPTURE_MODES)[number]
+
+export const DEFAULT_CAPTURE_MODE: CaptureMode = 'off'
 
 export function isCaptureMode(value: unknown): value is CaptureMode {
-  return typeof value === 'string' && (CAPTURE_MODES as readonly string[]).includes(value);
+  return isOneOf(CAPTURE_MODES, value)
 }
 
 /**
@@ -29,9 +31,11 @@ export function isCaptureMode(value: unknown): value is CaptureMode {
  * @throws Error naming `path` when the value is present but not a known mode.
  */
 export function readCaptureMode(value: unknown, path: string): CaptureMode | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined) return undefined
   if (!isCaptureMode(value)) {
-    throw new Error(`${path} must be one of ${CAPTURE_MODES.join(', ')} (got ${JSON.stringify(value)})`);
+    throw new Error(
+      `${path} must be one of ${CAPTURE_MODES.join(', ')} (got ${JSON.stringify(value)})`,
+    )
   }
-  return value;
+  return value
 }

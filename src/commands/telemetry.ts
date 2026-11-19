@@ -1,8 +1,8 @@
-import { Command } from 'commander';
-import chalk from 'chalk';
+import { Command } from 'commander'
+import chalk from 'chalk'
 
-import { isTelemetryEnabled, setTelemetry } from '../lib/config.js';
-import * as output from '../lib/output.js';
+import { isTelemetryEnabled, setTelemetry } from '@/lib/config'
+import * as output from '@/lib/output'
 
 const PRIVACY_NOTE = `Anonymous usage telemetry. We collect:
   - Command name (e.g. \`secret list\`, never the args)
@@ -13,38 +13,39 @@ We do NOT collect:
   - Tokens, secret keys, secret values, organisation IDs, workspace names
   - File paths, hostnames, or any free-form text from your shell
 
-Disable any time with \`cf telemetry off\` or \`DO_NOT_TRACK=1\`. Default is OFF until you opt in.`;
+Disable any time with \`cf telemetry off\` or \`DO_NOT_TRACK=1\`. Default is OFF until you opt in.`
 
-export const telemetryCommand = new Command('telemetry')
-  .description('Manage anonymous CLI telemetry');
+export const telemetryCommand = new Command('telemetry').description(
+  'Manage anonymous CLI telemetry',
+)
 
 telemetryCommand
   .command('status')
   .description('Show whether telemetry is enabled')
   .action(() => {
-    const on = isTelemetryEnabled();
-    console.log();
-    console.log(`  Telemetry: ${on ? chalk.green('on') : chalk.dim('off')}`);
-    console.log();
-    console.log(PRIVACY_NOTE);
-    console.log();
-  });
+    const on = isTelemetryEnabled()
+    output.print()
+    output.print(`  Telemetry: ${on ? chalk.green('on') : chalk.dim('off')}`)
+    output.print()
+    output.print(PRIVACY_NOTE)
+    output.print()
+  })
 
 telemetryCommand
   .command('on')
   .description('Enable anonymous telemetry')
   .action(() => {
-    setTelemetry(true);
-    output.success('Telemetry enabled. Thanks for helping us improve the CLI.');
-    console.log();
-    console.log(chalk.dim(PRIVACY_NOTE));
-    console.log();
-  });
+    setTelemetry(true)
+    output.success('Telemetry enabled. Thanks for helping us improve the CLI.')
+    output.print()
+    output.print(chalk.dim(PRIVACY_NOTE))
+    output.print()
+  })
 
 telemetryCommand
   .command('off')
   .description('Disable anonymous telemetry')
   .action(() => {
-    setTelemetry(false);
-    output.success('Telemetry disabled. No usage data will be sent.');
-  });
+    setTelemetry(false)
+    output.success('Telemetry disabled. No usage data will be sent.')
+  })

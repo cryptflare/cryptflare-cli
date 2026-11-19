@@ -1,32 +1,38 @@
-import { Command } from 'commander';
-import chalk from 'chalk';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { extname } from 'node:path';
+import { Command } from 'commander'
+import chalk from 'chalk'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 
-import { getClient } from '../lib/api.js';
-import { resolveContext } from '../lib/resolve.js';
-import * as output from '../lib/output.js';
-import * as progress from '../lib/progress.js';
+import { getClient } from '@/lib/api'
+import { resolveContext } from '@/lib/resolve'
+import * as output from '@/lib/output'
+import * as progress from '@/lib/progress'
+import { EXIT_CODES } from '@/lib/exit-codes'
+import { errorMessage, isRecord } from '@/lib/guards'
 
-type ConflictPolicy = 'skip' | 'overwrite' | 'suffix';
+const CONFLICT_POLICIES = ['skip', 'overwrite', 'suffix'] as const
+type ConflictPolicy = (typeof CONFLICT_POLICIES)[number]
 
-const VALID_KEY = /^[A-Z][A-Z0-9_]*$/;
-const VALID_KEY_LOOSE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function isConflictPolicy(value: string): value is ConflictPolicy {
+  return CONFLICT_POLICIES.some((policy) => policy === value)
+}
+
+const VALID_KEY = /^[A-Z][A-Z0-9_]*$/
+const VALID_KEY_LOOSE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 type ImportItem = {
-  key: string;
-  value: string;
-  description?: string;
-  metadata?: Record<string, string>;
-  podId?: string | null;
-};
+  key: string
+  value: string
+  description?: string
+  metadata?: Record<string, string>
+  podId?: string | null
+}
 
 type ImportResult = {
-  imported: number;
-  skipped: number;
-  failed: number;
-  items: Array<{ key: string; status: 'imported' | 'skipped' | 'failed'; reason?: string }>;
-};
+  imported: number
+  skipped: number
+  failed: number
+  items: Array<{ key: string; status: 'imported' | 'skipped' | 'failed'; reason?: string }>
+}
 
 const SOURCE_HELP = [
   '  dotenv      .env / .env.local / .env.production (KEY=VALUE format)',
@@ -37,7 +43,7 @@ const SOURCE_HELP = [
   '  protonpass  Proton Pass JSON / ZIP',
   '  dashlane    Dashlane CSV / ZIP',
   '  keepass     KeePass XML',
-].join('\n');
+].join('\n')
 
 /**
  * Builds the `POST /secrets/import/external` body.
@@ -49,22 +55,25 @@ const SOURCE_HELP = [
  * through the SDK, so neither the contract audit nor the SDK types covered it.
  */
 export function buildImportBody(input: {
-  source: string;
-  conflictPolicy: ConflictPolicy;
-  pod?: unknown;
-  items: ImportItem[];
+  source: string
+  conflictPolicy: ConflictPolicy
+  pod?: unknown
+  items: ImportItem[]
 }): Record<string, unknown> {
   return {
     source: input.source,
     conflictPolicy: input.conflictPolicy,
     ...(typeof input.pod === 'string' && input.pod !== '' ? { podId: input.pod } : {}),
     secrets: input.items,
-  };
+  }
 }
 
 export const importCommand = new Command('import')
   .description('Import secrets from .env, Doppler, or a password-manager export')
-  .option('-s, --source <id>', 'Source format: dotenv, doppler, 1password, bitwarden, lastpass, protonpass, dashlane, keepass')
+  .option(
+    '-s, --source <id>',
+    'Source format: dotenv, doppler, 1password, bitwarden, lastpass, protonpass, dashlane, keepass',
+  )
   .option('-f, --file <path>', 'Path to the export file')
   .option('-w, --workspace <slug>', 'Workspace ID or slug')
   .option('-e, --env <slug>', 'Environment ID or slug')
@@ -79,169 +88,172 @@ export const importCommand = new Command('import')
     try {
       // Validate inputs ---------------------------------------------------
       if (!opts.source) {
-        output.warn('Missing --source. Pick one of:');
-        console.error(SOURCE_HELP);
-        process.exit(1);
+        output.warn('Missing --source. Pick one of:')
+        output.printError(SOURCE_HELP)
+        process.exit(EXIT_CODES.USAGE)
       }
       if (!opts.file) {
-        output.warn('Missing --file. Path to the export file is required.');
-        process.exit(1);
+        output.warn('Missing --file. Path to the export file is required.')
+        process.exit(EXIT_CODES.USAGE)
       }
       if (!existsSync(opts.file)) {
-        output.warn(`File not found: ${opts.file}`);
-        process.exit(1);
+        output.warn(`File not found: ${opts.file}`)
+        process.exit(EXIT_CODES.USAGE)
       }
-      const stat = statSync(opts.file);
+      const stat = statSync(opts.file)
       if (stat.size > 10 * 1024 * 1024) {
-        output.warn(`File too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Cap is 10 MB.`);
-        process.exit(1);
+        output.warn(`File too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Cap is 10 MB.`)
+        process.exit(EXIT_CODES.USAGE)
       }
-      const conflictPolicy = String(opts.conflict).toLowerCase();
-      if (!['skip', 'overwrite', 'suffix'].includes(conflictPolicy)) {
-        output.warn('--conflict must be one of: skip, overwrite, suffix');
-        process.exit(1);
+      const conflictPolicy = String(opts.conflict).toLowerCase()
+      if (!isConflictPolicy(conflictPolicy)) {
+        output.warn(`--conflict must be one of: ${CONFLICT_POLICIES.join(', ')}`)
+        process.exit(EXIT_CODES.USAGE)
       }
 
-      const ctx = resolveContext(opts);
-      const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env };
-      const client = getClient();
+      const ctx = resolveContext(opts)
+      const scope = { organisation: ctx.org, workspace: ctx.workspace, environment: ctx.env }
+      const client = getClient()
 
-      progress.start(`Parsing ${opts.file}...`);
+      progress.start(`Parsing ${opts.file}...`)
 
-      const fileBytes = readFileSync(opts.file);
+      const fileBytes = readFileSync(opts.file)
 
       // Source-specific parsing happens client-side for `dotenv` and
       // `doppler` so the user gets fast feedback before any network
       // call. The pwmgr family keeps the existing browser/UI flow as
       // the canonical path; the CLI submits already-parsed plaintext
       // through the same `/import/external` endpoint.
-      let items: ImportItem[];
+      let items: ImportItem[]
       try {
-        items = await parseSource(opts.source, fileBytes, opts.passphrase as string | undefined);
+        items = await parseSource(opts.source, fileBytes)
       } catch (err) {
-        progress.fail(`Parse failed: ${(err as Error).message}`);
-        process.exit(1);
+        progress.fail(`Parse failed: ${errorMessage(err)}`)
+        process.exit(1)
       }
 
-      progress.succeed(`Parsed ${items.length} secret${items.length === 1 ? '' : 's'} from ${opts.source}`);
+      progress.succeed(
+        `Parsed ${items.length} secret${items.length === 1 ? '' : 's'} from ${opts.source}`,
+      )
 
       if (items.length === 0) {
-        output.warn('Nothing to import.');
-        return;
+        output.warn('Nothing to import.')
+        return
       }
 
       // Apply --pod override at item level so the API does not need a
       // second request to relocate them.
       if (typeof opts.pod === 'string' && opts.pod !== '') {
         for (const item of items) {
-          item.podId = opts.pod;
+          item.podId = opts.pod
         }
       }
 
       if (opts.dryRun) {
-        renderDryRun(items, opts.json);
-        return;
+        renderDryRun(items, opts.json)
+        return
       }
 
       // Send to API -------------------------------------------------------
-      progress.start(`Pushing ${items.length} secret${items.length === 1 ? '' : 's'}...`);
-      const result = await client.runner.send<{ data: ImportResult }>({
+      progress.start(`Pushing ${items.length} secret${items.length === 1 ? '' : 's'}...`)
+      const result = await client.request<{ data: ImportResult }>({
         method: 'POST',
         path: `/v1/organisations/${encodeURIComponent(ctx.org)}/workspaces/${encodeURIComponent(ctx.workspace)}/environments/${encodeURIComponent(ctx.env)}/secrets/import/external`,
         body: buildImportBody({
           source: opts.source,
-          conflictPolicy: conflictPolicy as ConflictPolicy,
+          conflictPolicy,
           pod: opts.pod,
           items,
         }),
-      });
-      progress.stop();
+      })
+      progress.stop()
 
       if (opts.json) {
-        output.json(result.data);
-        return;
+        output.json(result.data)
+        return
       }
 
-      renderResult(result.data, scope.workspace, scope.environment);
+      renderResult(result.data, scope.workspace, scope.environment)
     } catch (err) {
-      output.handleError(err);
+      output.handleError(err)
     }
-  });
+  })
 
 // -- parsing -----------------------------------------------------------
 
-async function parseSource(source: string, bytes: Buffer, passphrase?: string): Promise<ImportItem[]> {
+async function parseSource(source: string, bytes: Buffer): Promise<ImportItem[]> {
   switch (source) {
     case 'dotenv':
-      return parseDotenv(bytes.toString('utf-8'));
+      return parseDotenv(bytes.toString('utf-8'))
     case 'doppler':
-      return parseDoppler(bytes.toString('utf-8'));
+      return parseDoppler(bytes.toString('utf-8'))
     default:
       // Pwmgr family - delegate parsing to the in-browser flow by
       // posting raw bytes via the API's multipart endpoint. CLI-side
       // parsing for these formats lives in @cryptflare/shared but is
       // gated behind a runtime toggle until the CLI ships an embedded
       // Web Crypto polyfill story for older Node versions.
-      throw new Error(`source "${source}" not yet supported by the CLI - upload via the dashboard`);
+      throw new Error(`source "${source}" not yet supported by the CLI - upload via the dashboard`)
   }
 }
 
 function parseDotenv(text: string): ImportItem[] {
-  const out: ImportItem[] = [];
+  const out: ImportItem[] = []
   // Strip BOM.
-  const cleaned = text.replace(/^﻿/, '');
-  const lines = readLogicalLines(cleaned);
+  const cleaned = text.replace(/^\uFEFF/, '')
+  const lines = readLogicalLines(cleaned)
 
   for (const raw of lines) {
-    const trimmed = stripExportPrefix(raw.trim());
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx <= 0) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    if (!VALID_KEY_LOOSE.test(key)) continue;
-    const rawValue = trimmed.slice(eqIdx + 1);
-    const value = unquoteDotenvValue(rawValue);
-    if (value === null) continue;
+    const trimmed = stripExportPrefix(raw.trim())
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eqIdx = trimmed.indexOf('=')
+    if (eqIdx <= 0) continue
+    const key = trimmed.slice(0, eqIdx).trim()
+    if (!VALID_KEY_LOOSE.test(key)) continue
+    const rawValue = trimmed.slice(eqIdx + 1)
+    const value = unquoteDotenvValue(rawValue)
+    if (value === null) continue
     if (!VALID_KEY.test(key)) {
       // Server requires UPPER_SNAKE_CASE; uppercase the key locally.
-      out.push({ key: key.toUpperCase(), value });
+      out.push({ key: key.toUpperCase(), value })
     } else {
-      out.push({ key, value });
+      out.push({ key, value })
     }
   }
-  return out;
+  return out
 }
 
 function parseDoppler(text: string): ImportItem[] {
-  let raw: unknown;
+  let raw: unknown
   try {
-    raw = JSON.parse(text);
-  } catch (err) {
-    throw new Error('doppler export is not valid JSON');
+    raw = JSON.parse(text)
+  } catch {
+    throw new Error('doppler export is not valid JSON')
   }
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('doppler export must be an object of KEY -> value');
+  if (!isRecord(raw)) {
+    throw new Error('doppler export must be an object of KEY -> value')
   }
-  const out: ImportItem[] = [];
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (key.startsWith('DOPPLER_')) continue;
-    if (!VALID_KEY.test(key)) continue;
-    let str: string | null = null;
+  const out: ImportItem[] = []
+  for (const [key, value] of Object.entries(raw)) {
+    if (key.startsWith('DOPPLER_')) continue
+    if (!VALID_KEY.test(key)) continue
+    let str: string | null = null
     if (typeof value === 'string') {
-      str = value;
-    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const obj = value as Record<string, unknown>;
-      if (typeof obj['computed'] === 'string') str = obj['computed'] as string;
-      else if (typeof obj['raw'] === 'string') str = obj['raw'] as string;
+      str = value
+    } else if (isRecord(value)) {
+      const computed = value['computed']
+      const rawValue = value['raw']
+      if (typeof computed === 'string') str = computed
+      else if (typeof rawValue === 'string') str = rawValue
     }
-    if (str === null) continue;
-    out.push({ key, value: str });
+    if (str === null) continue
+    out.push({ key, value: str })
   }
-  return out;
+  return out
 }
 
 function stripExportPrefix(line: string): string {
-  return line.startsWith('export ') ? line.slice('export '.length).trimStart() : line;
+  return line.startsWith('export ') ? line.slice('export '.length).trimStart() : line
 }
 
 /**
@@ -250,72 +262,84 @@ function stripExportPrefix(line: string): string {
  * one physical line == one logical line.
  */
 function readLogicalLines(text: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  let inDoubleQuote = false;
+  const out: string[] = []
+  let buf = ''
+  let inDoubleQuote = false
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
+    const ch = text[i]
+    const next = text[i + 1]
     if (inDoubleQuote) {
       if (ch === '\\' && next !== undefined) {
-        buf += ch + next;
-        i++;
-        continue;
+        buf += ch + next
+        i++
+        continue
       }
-      if (ch === '"') inDoubleQuote = false;
-      buf += ch;
-      continue;
+      if (ch === '"') inDoubleQuote = false
+      buf += ch
+      continue
     }
-    if (ch === '"') inDoubleQuote = true;
+    if (ch === '"') inDoubleQuote = true
     if (ch === '\n') {
-      out.push(buf);
-      buf = '';
-      continue;
+      out.push(buf)
+      buf = ''
+      continue
     }
     if (ch === '\r') {
-      out.push(buf);
-      buf = '';
-      if (next === '\n') i++;
-      continue;
+      out.push(buf)
+      buf = ''
+      if (next === '\n') i++
+      continue
     }
-    buf += ch;
+    buf += ch
   }
-  if (buf) out.push(buf);
-  return out;
+  if (buf) out.push(buf)
+  return out
 }
 
 function unquoteDotenvValue(raw: string): string | null {
-  if (raw.length === 0) return '';
-  const first = raw[0];
-  if (first !== '"' && first !== '\'') {
-    const hashIdx = raw.indexOf(' #');
-    return (hashIdx === -1 ? raw : raw.slice(0, hashIdx)).trim();
+  if (raw.length === 0) return ''
+  const first = raw[0]
+  if (first !== '"' && first !== "'") {
+    const hashIdx = raw.indexOf(' #')
+    return (hashIdx === -1 ? raw : raw.slice(0, hashIdx)).trim()
   }
-  if (first === '\'') {
-    if (!raw.endsWith('\'') || raw.length < 2) return null;
-    return raw.slice(1, -1);
+  if (first === "'") {
+    if (!raw.endsWith("'") || raw.length < 2) return null
+    return raw.slice(1, -1)
   }
   // first === '"'
-  if (!raw.endsWith('"') || raw.length < 2) return null;
-  let out = '';
+  if (!raw.endsWith('"') || raw.length < 2) return null
+  let out = ''
   for (let j = 1; j < raw.length - 1; j++) {
-    const ch = raw[j]!;
+    const ch = raw.charAt(j)
     if (ch === '\\' && j + 1 < raw.length - 1) {
-      const nxt = raw[j + 1]!;
+      const nxt = raw.charAt(j + 1)
       switch (nxt) {
-        case 'n': out += '\n'; break;
-        case 'r': out += '\r'; break;
-        case 't': out += '\t'; break;
-        case '\\': out += '\\'; break;
-        case '"': out += '"'; break;
-        default: out += nxt; break;
+        case 'n':
+          out += '\n'
+          break
+        case 'r':
+          out += '\r'
+          break
+        case 't':
+          out += '\t'
+          break
+        case '\\':
+          out += '\\'
+          break
+        case '"':
+          out += '"'
+          break
+        default:
+          out += nxt
+          break
       }
-      j++;
-      continue;
+      j++
+      continue
     }
-    out += ch;
+    out += ch
   }
-  return out;
+  return out
 }
 
 // -- rendering ---------------------------------------------------------
@@ -323,32 +347,45 @@ function unquoteDotenvValue(raw: string): string | null {
 function renderDryRun(items: ImportItem[], asJson?: boolean) {
   if (asJson) {
     output.json({
-      preview: items.map((i) => ({ key: i.key, valueLength: i.value.length, podId: i.podId ?? null })),
-    });
-    return;
+      preview: items.map((i) => ({
+        key: i.key,
+        valueLength: i.value.length,
+        podId: i.podId ?? null,
+      })),
+    })
+    return
   }
-  console.log();
-  console.log(chalk.bold('  Dry run preview - nothing was sent to CryptFlare'));
-  console.log();
+  output.print()
+  output.print(chalk.bold('  Dry run preview - nothing was sent to CryptFlare'))
+  output.print()
   for (const item of items) {
-    console.log(`  ${chalk.cyan(item.key.padEnd(40))} ${chalk.dim(`(${item.value.length} bytes)`)}`);
+    output.print(
+      `  ${chalk.cyan(item.key.padEnd(40))} ${chalk.dim(`(${item.value.length} bytes)`)}`,
+    )
   }
-  console.log();
-  console.log(chalk.dim(`  ${items.length} secret${items.length === 1 ? '' : 's'} would be imported. Re-run without --dry-run to apply.`));
-  console.log();
+  output.print()
+  output.print(
+    chalk.dim(
+      `  ${items.length} secret${items.length === 1 ? '' : 's'} would be imported. Re-run without --dry-run to apply.`,
+    ),
+  )
+  output.print()
 }
 
 function renderResult(result: ImportResult, workspace: string, environment: string) {
-  console.log();
-  output.success(`Imported ${chalk.bold(String(result.imported))} secrets into ${chalk.bold(workspace)}/${chalk.bold(environment)}`);
-  if (result.skipped > 0) console.log(chalk.dim(`  ${result.skipped} skipped (key already existed)`));
+  output.print()
+  output.success(
+    `Imported ${chalk.bold(String(result.imported))} secrets into ${chalk.bold(workspace)}/${chalk.bold(environment)}`,
+  )
+  if (result.skipped > 0)
+    output.print(chalk.dim(`  ${result.skipped} skipped (key already existed)`))
   if (result.failed > 0) {
-    console.log(chalk.red(`  ${result.failed} failed`));
+    output.print(chalk.red(`  ${result.failed} failed`))
     for (const item of result.items) {
       if (item.status === 'failed') {
-        console.log(chalk.red(`    - ${item.key}: ${item.reason ?? 'unknown error'}`));
+        output.print(chalk.red(`    - ${item.key}: ${item.reason ?? 'unknown error'}`))
       }
     }
   }
-  console.log();
+  output.print()
 }

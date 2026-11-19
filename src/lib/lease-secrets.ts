@@ -1,4 +1,4 @@
-import { KEY_PATTERN, MAX_KEY_LENGTH } from './secret-validation.js';
+import { KEY_PATTERN, MAX_KEY_LENGTH } from '@/lib/secret-validation'
 
 /**
  * Names the secrets a dynamic lease's credentials are stored under.
@@ -10,19 +10,24 @@ import { KEY_PATTERN, MAX_KEY_LENGTH } from './secret-validation.js';
  *
  * @throws Error when the prefix, or a resulting key, is not a valid secret key.
  */
-export function leaseSecretKeys(prefix: string, credentials: Record<string, string>): Map<string, string> {
-  const cleaned = prefix.trim().replace(/_+$/, '');
+export function leaseSecretKeys(
+  prefix: string,
+  credentials: Record<string, string>,
+): Map<string, string> {
+  const cleaned = prefix.trim().replace(/_+$/, '')
   if (!KEY_PATTERN.test(cleaned)) {
-    throw new Error(`--prefix must be UPPER_SNAKE_CASE, for example SIGNUP_TEST (got "${prefix}")`);
+    throw new Error(`--prefix must be UPPER_SNAKE_CASE, for example SIGNUP_TEST (got "${prefix}")`)
   }
 
-  const secrets = new Map<string, string>();
+  const secrets = new Map<string, string>()
   for (const [field, value] of Object.entries(credentials)) {
-    const key = `${cleaned}_${field.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase()}`;
+    const key = `${cleaned}_${field.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase()}`
     if (!KEY_PATTERN.test(key) || key.length > MAX_KEY_LENGTH) {
-      throw new Error(`Credential field "${field}" does not make a valid secret key with this prefix.`);
+      throw new Error(
+        `Credential field "${field}" does not make a valid secret key with this prefix.`,
+      )
     }
-    secrets.set(key, value);
+    secrets.set(key, value)
   }
-  return secrets;
+  return secrets
 }

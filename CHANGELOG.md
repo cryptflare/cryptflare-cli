@@ -1,5 +1,71 @@
 # @cryptflare/cli
 
+## 0.9.0
+
+### Minor Changes
+
+- e0825e6: **CLI:** `cf auth login` no longer puts the code in the link it opens. It prints the code and opens `https://vault.cryptflare.com/cli/auth`, where you type the code yourself, so a link someone sends you cannot ask you to approve their computer. The CLI tells the vault its name, version, computer name and operating system, which the vault shows before you approve. The code expires after 10 minutes. Polling follows RFC 8628: the CLI waits the interval the API gives and slows down when told to. If you click **Deny, I didn't start this** in the browser, the CLI stops at once and says the sign-in was denied.
+
+  **SDK:** `cli.requestDeviceCode()` takes `clientVersion`, `hostname` and `platform` beside `clientName` (`CliDeviceInput`), `CliCheckResponse` matches the API: it reports `denied`, and no longer names who asked. `ERRORS` gains `AUTH_DEVICE_DENIED`, `AUTH_SLOW_DOWN` and `AUTH_REAUTH_REQUIRED`.
+
+### Patch Changes
+
+- 2c4ab2c: **SDK:** Every resource method now calls the route the API serves, and almost every method returns the type that route declares.
+  - 181 methods that returned `Promise<unknown>` now return the response type inferred from the API's own Zod schemas (exported from the package root). Ten still return `unknown`: their routes publish no schema, or they are redirects.
+  - Calls that could not have worked are fixed. Where the API needs a field the method did not take, the input changed:
+    - `auth.requestOtp`, `verifyOtp`, `verifyTotp`, `cli.checkDeviceCode`, `approveDevice`, `pollToken`, `onboarding.verifyCheckout`, `sso.oidcCallback`, `status.checkUnsubscribe`, `tokens.redeemClaim`, `wellKnown.jwks` and `organisations.checkSlug` now use the API's paths.
+    - `tokens.create` now takes and sends `workspaceId` and `environment` (both required by the API).
+    - `tokens.createClaimLink` posts to `/tokens/claim-links` and takes `{ name, workspaceId, scopes, environment, expiresInMinutes? }`.
+    - `transfers.accept` / `transfers.decline` take `{ token }` and send it; `transfers.pending(options?)` no longer takes an unused input.
+    - `integrations`: the AWS/GCP federation and secret-list methods and the seven provider list methods take `integrationId`; `listAwsSecrets` no longer takes `region` and `listGcpSecrets` no longer takes `project` (the API never read them); `registerAzure` takes only the organisation; `githubCallback` takes `installationId: number`, `state` and an optional `setupAction`; `githubInstallUrl` returns the `{ data: { url, state } }` envelope.
+    - `rotationPolicies.get` / `create` take `{ workspace, environment, key }`.
+    - `tags.create` / `tags.delete` take `{ resourceType, resourceId, tag }`.
+    - `billing.confirmSession` sends `sessionId`.
+    - `support.uploadAttachment` takes `{ ticketId, file: Blob, filename? }` and uploads multipart form data. Request bodies may now be `FormData`.
+    - `organisations.toggleFeature` posts `{ feature, enabled }` to `/features` and is no longer deprecated.
+  - `checkSlug`, `getFeatures`, `resendInvitation`, `tokens.toggle` and `serviceTokens.toggle` returned `undefined`; they now return the response body.
+  - A missing organisation, workspace or environment slug throws `ConfigurationError` instead of a plain `Error`, and `secrets.revealAll` stopping at its page limit throws `UnknownAPIError` (`code: 'pagination_limit'`), so both can be caught with `instanceof CryptFlareError`.
+  - Every public method's JSDoc names the permission (or session) the route requires.
+  - **Security fix, breaking in practice:** `auth.verifyTotp` now takes `{ pendingLoginToken, code }`. Pass the `pendingLoginToken` that `auth.verifyOtp` returns when `requiresTotp` is true (single use, valid for 5 minutes). The old `{ userId, code }` call could not be made secure: a user id alone let anyone skip the email code and attack the 6-digit second factor directly, so the API now ignores `userId` and answers such a call with `401 AUTH_TOTP_INVALID`.
+
+  **CLI:**
+  - `cf service-token list` showed every token as disabled with blank "last used" and "expires" columns; it now reads the fields the API sends.
+  - `cf token create` now sends the workspace and environment the API requires.
+  - `cf doctor` reports the token kind and organisation (the email it tried to print is not part of the token identity response).
+  - `cf status` no longer shows a "Daily Requests" usage row that was always 0 (the API does not report daily usage there).
+  - `cf run` with no command after `--` prints a usage error (exit 2) instead of crashing.
+  - `cf config unset <key>` rejects keys that are not settings (exit 2) and lists the valid ones, instead of silently doing nothing.
+  - `cf org use` and the update notices read "Pick an organisation" / "New version available".
+
+  **MCP client:** Validate every server response at runtime instead of trusting its shape. A malformed envelope or list entry now rejects with `McpError` code `UPSTREAM_ERROR` (status 502). `listPrompts()` returns `arguments: []` when the server omits them, and `listResources()` defaults a missing `mimeType` to `text/plain`.
+
+- 1c560bc: **SDK:** Types and errors now match the API.
+  - `SecretSettings`, `SecretVersion` and `WhoAmI` are inferred from the API's own schemas. `auth.getMe()` now returns `AuthMeResponse` (`{ user, organisations }`), which is what `/v1/auth/me` sends.
+  - `ERRORS` / `ErrorCode` are generated from the API's registry and include every code it can emit (`POD_NOT_FOUND`, `ACCESS_TOKEN_IP_BLOCKED`, `CONFIRMATION_*`, `IMPORT_*` and the MCP codes were missing).
+  - New `RequestAbortedError`: a caller's `AbortSignal` no longer surfaces as `ConnectionError` and is never retried.
+  - New `EnvelopeError` for malformed or undecryptable `cfenv:` envelopes; `unseal` checks the envelope shape.
+  - A 2xx response that is not JSON (for example a proxy's HTML page) or is malformed JSON now throws `UnknownAPIError` with `code: 'invalid_response'` instead of resolving `undefined`. Plain-text bodies are returned as strings.
+  - New `client.request(descriptor, options)` escape hatch for endpoints without a typed method. `client.runner` is deprecated in favour of `client.request` and will be removed in the next major version.
+  - Enum fields that were typed `string` now carry their literal unions: SSO `default_role` (`OrgRole`), compliance `framework` / `format` / `sections`, dynamic-secret `provider`, billing `addonType`, and secrets-import `source` / `conflictPolicy`. Code that passed arbitrary strings there will need a valid value.
+
+  **MCP client:** Every request now has a timeout (`timeoutMs`, default 30s) and accepts an `AbortSignal`, client-wide or per call. A timeout rejects with `McpError` code `REQUEST_TIMEOUT`, a caller abort with `REQUEST_ABORTED` (never retried). Extra `headers` can no longer override `Authorization`. The exported types now match what the server sends: `Tool` uses `deprecated` and `category` (was `deprecation`, `endpoint`, `tags`), `ToolListEntry` carries `annotations`, and the new `ToolErrorPayload` describes the JSON inside an `isError: true` tool result, which is how the server now reports tool failures.
+
+  **CLI:** Warnings and notes now go to stderr so piped output only carries data, and exit codes tell failure classes apart: `2` usage, `3` authentication, `4` network, `1` anything else. See "Exit codes" in the README. `cf whoami` and `cf auth status` use the SDK's typed `getMe()` response.
+
+- c4434eb: **SDK:** Drop the `zod` peer dependency. The published types now work with Zod 3, Zod 4 or no Zod at all.
+
+  The SDK never used Zod at runtime. Its types were Zod schema declarations inlined into `dist/index.d.ts`, so they only type-checked against the one Zod major the SDK was built with, and the optional peer range (`^3.20.0`) pinned consumers to Zod 3. The monorepo is now on Zod 4. Moving the peer range to `^4` would have broken every consumer still on Zod 3, and Zod 4's declarations do not type-check against Zod 3.25's `zod/v4` subpath or Zod 4.0 either, so a dual range such as `^3.25.0 || ^4.0.0` was not possible.
+
+  The vendored types are now generated as plain TypeScript (`scripts/materialize-vendored.mjs`): every `z.infer<>` alias is resolved to a type literal and the output is compiled on its own to make sure nothing still points at Zod. All 347 exported request and response types are structurally the same as in the previous release. If you only installed `zod` for the SDK's types, you can remove it.
+
+  **CLI:** The bundled request schemas now run on Zod 4, and the package is built with tsup 9. No command or flag changes.
+
+- Updated dependencies [2c4ab2c]
+- Updated dependencies [e0825e6]
+- Updated dependencies [1c560bc]
+- Updated dependencies [c4434eb]
+  - @cryptflare/sdk@1.3.0
+
 ## 0.8.0
 
 ### Minor Changes
@@ -473,9 +539,9 @@ rollback`, `workspace delete`, `pod delete`, `token revoke` - printed "Pass
 
   ```ts
   const stream = await client.audit.export({
-    startDate: "2026-04-01T00:00:00Z",
-    endDate: "2026-04-30T23:59:59Z",
-  });
+    startDate: '2026-04-01T00:00:00Z',
+    endDate: '2026-04-30T23:59:59Z',
+  })
   // stream is a ReadableStream<Uint8Array> of JSON Lines.
   ```
 
