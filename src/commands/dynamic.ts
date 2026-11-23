@@ -12,6 +12,7 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 
+import { dynamicGithubCommand } from '@/commands/dynamic-github'
 import { getClient } from '@/lib/api'
 import { leaseSecretKeys } from '@/lib/lease-secrets'
 import * as output from '@/lib/output'
@@ -21,6 +22,8 @@ import { upsertSecret } from '@/lib/secret-write'
 export const dynamicCommand = new Command('dynamic').description(
   'Issue short-lived credentials from dynamic secret configs',
 )
+
+dynamicCommand.addCommand(dynamicGithubCommand)
 
 dynamicCommand
   .command('list')

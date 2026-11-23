@@ -27,6 +27,7 @@ import { buildCompletionCommand } from '@/commands/completion'
 import { importCommand } from '@/commands/import'
 import { mcpCommand } from '@/commands/mcp'
 import { dynamicCommand } from '@/commands/dynamic'
+import { githubCommand } from '@/commands/github'
 import { EXIT_CODES } from '@/lib/exit-codes'
 import { VERSION } from '@/version'
 
@@ -67,6 +68,9 @@ program.addCommand(addEnvFileCommands(envCommand))
 
 // Dynamic secrets
 program.addCommand(dynamicCommand)
+
+// Push to GitHub Actions secrets
+program.addCommand(githubCommand)
 
 // AI agents
 program.addCommand(mcpCommand)

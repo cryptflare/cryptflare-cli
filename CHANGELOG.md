@@ -1,5 +1,15 @@
 # @cryptflare/cli
 
+## 0.11.0
+
+### Minor Changes
+
+- 427a234: Add `cf dynamic github connect`, which connects a GitHub organisation to dynamic secrets from the terminal. It creates a GitHub App on the organisation from a manifest (one approval in the browser), sends you on to install it, waits for the installation, and saves a `github_app` dynamic secret config. Each lease from it is a GitHub installation token limited to the repositories (`--repos`) and permissions (`--permissions contents:read,pull_requests:write`) you chose; it is revoked when the lease ends and GitHub ends it after an hour regardless. `cf dynamic issue <config> --save --prefix GITHUB` stores it as `GITHUB_TOKEN`.
+
+  Leave out `--github-org` and, when the GitHub CLI is signed in, `cf` lists your organisations to pick from. `--app-id` with `--private-key-file` uses an App you already have. The App's private key is held in memory and sent once to CryptFlare, where it is encrypted; it is never written to disk.
+
+- 427a234: Add `cf github connect`, which pushes environments to a GitHub repository's Actions secrets. Run it in a checkout with the GitHub CLI signed in: it reads the repository from the git remote, uses `gh` to check you administer it and to create any missing GitHub environment, sends you to install the CryptFlare GitHub App on the owner if needed, and creates one push per environment (`--env staging --env prod:production`, or `--repository-secrets`). `--auto` pushes on every change; `--only`, `--exclude` and `--prefix` choose what is pushed and how it is named. `gh` runs as its own process, so its token is never read or stored; the pushes run through the GitHub App. `cf github list` shows the pushes and `cf github push <id>` runs one now.
+
 ## 0.10.0
 
 ### Minor Changes
