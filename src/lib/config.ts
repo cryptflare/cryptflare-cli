@@ -25,6 +25,12 @@ type CfConfig = {
    * Default: `undefined` (treated as off until the user opts in).
    */
   telemetry?: boolean
+  /**
+   * `false` stops `cf sync` reporting this machine's state (counts and
+   * states only) to the devices page. Default: `undefined` (reporting on).
+   * `CRYPTFLARE_DEVICE_REPORT=0` turns it off for one process.
+   */
+  deviceReport?: boolean
   /** Permissions cache. Keyed implicitly by tokenPrefix - if the bearer
    * token changes, the entry is treated as a miss and refetched. */
   permissions?: PermissionCacheEntry
@@ -48,6 +54,7 @@ const config = new Conf<CfConfig>({
       },
     },
     telemetry: { type: 'boolean' },
+    deviceReport: { type: 'boolean' },
     permissions: {
       type: 'object',
       properties: {
@@ -94,6 +101,15 @@ export function isTelemetryEnabled(): boolean {
 
 export function setTelemetry(enabled: boolean) {
   config.set('telemetry', enabled)
+}
+
+/** The saved device-report preference: `false` when turned off with `cf device report off`. */
+export function getDeviceReportSetting(): boolean | undefined {
+  return config.get('deviceReport')
+}
+
+export function setDeviceReport(enabled: boolean) {
+  config.set('deviceReport', enabled)
 }
 
 export function getToken(): string | undefined {
@@ -145,6 +161,7 @@ export const UNSETTABLE_KEYS = [
   'org',
   'token',
   'telemetry',
+  'deviceReport',
   'defaults',
   'defaults.workspace',
   'defaults.environment',

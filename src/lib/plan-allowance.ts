@@ -70,9 +70,12 @@ export function parsePlanAllowance(raw: unknown): PlanAllowance | null {
 
   const read = (resource: PlanResource): { limit: number; remaining: number } | null => {
     // Effective limits include purchased add-ons; the plain plan limits do not.
+    // `GET .../usage` nests both under `usage.<resource>` as `{ used, limit }`.
     const limit =
-      readNumber(body, 'effectiveLimits', resource) ?? readNumber(body, 'limits', resource)
-    const used = readNumber(body, 'usage', resource)
+      readNumber(body, 'effectiveLimits', resource) ??
+      readNumber(body, 'limits', resource) ??
+      readNumber(body, 'usage', resource, 'limit')
+    const used = readNumber(body, 'usage', resource) ?? readNumber(body, 'usage', resource, 'used')
     if (limit === undefined || used === undefined) return null
     const effective = limit === UNLIMITED ? Infinity : limit
     return { limit: effective, remaining: Math.max(0, effective - used) }
@@ -88,17 +91,24 @@ export function parsePlanAllowance(raw: unknown): PlanAllowance | null {
 }
 
 /**
- * Asks the API what the plan has left. Any failure (a token without
- * `billing:read`, an older API, no network) means "not known", never "none".
+ * Asks the API what the plan has left: the subscription first (add-ons
+ * included, needs `billing:read`), then `GET .../usage`, which any member or
+ * token of the organisation may read. Any failure (an older API, no network)
+ * means "not known", never "none".
  */
 export async function loadPlanAllowance(
   client: CryptFlare,
   org: string | undefined,
 ): Promise<PlanAllowance | null> {
+  const scope = org ? { organisation: org } : {}
   try {
-    return parsePlanAllowance(
-      await client.billing.getSubscription({ ...(org ? { organisation: org } : {}) }),
-    )
+    const allowance = parsePlanAllowance(await client.billing.getSubscription(scope))
+    if (allowance) return allowance
+  } catch {
+    // Most tokens lack billing:read. The usage endpoint answers for them.
+  }
+  try {
+    return parsePlanAllowance(await client.usage.get(scope))
   } catch {
     return null
   }

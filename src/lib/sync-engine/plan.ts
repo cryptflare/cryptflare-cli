@@ -45,6 +45,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import type { CryptFlare } from '@cryptflare/sdk'
 import { DEFAULT_CAPTURE_MODE, type CaptureMode } from '@/lib/capture'
 import { parseEnvContent, toValueMap } from '@/lib/env-file'
+import { detectFormat, isSyncableFormat } from '@/lib/local-env/formats'
+import { decryptValues, hasCiphertext, manifestSaysEncrypted } from '@/lib/local-env/sync-codec'
 import {
   bindingFilePath,
   bindingKey,
@@ -98,6 +100,16 @@ export type BindingPlan = {
   localValues: Map<string, string>
   /** Values revealed during first-contact adoption, reused by `applyPlan`. */
   revealed: Map<string, string>
+  /**
+   * The file holds `cf:v1` ciphertext (or its binding says `encrypted`).
+   * `localValues` are then the decrypted values, and `applyPlan` encrypts
+   * what it writes. See `docs/guides/encrypted-env-files.md`.
+   */
+  encrypted?: boolean
+  /** Raw values as written in the file, ciphertext included. Set when `encrypted`. */
+  fileValues?: Map<string, string>
+  /** The file is not dotenv-shaped (TOML, JSON, tfvars): sync leaves it alone. */
+  unsupportedFormat?: string
 }
 
 export type ApplyResult = {
@@ -193,6 +205,25 @@ export async function planBinding(
   const key = bindingKey(project, binding)
   const scope = scopeFor(project, binding)
 
+  // A structured secrets file bound in the manifest (secrets.toml, tfvars)
+  // is for `cf run --materialize`, not for the dotenv writer: rewriting it
+  // as dotenv would corrupt it.
+  const format = detectFormat(binding.file)
+  if (!isSyncableFormat(format)) {
+    return {
+      key,
+      project,
+      binding,
+      filePath,
+      creating: false,
+      actions: [],
+      remoteVersions: new Map(),
+      localValues: new Map(),
+      revealed: new Map(),
+      unsupportedFormat: format?.label ?? 'unknown',
+    }
+  }
+
   const remoteVersions = new Map<string, number>()
   for await (const secret of await client.secrets.list(scope)) {
     remoteVersions.set(secret.key, secret.version)
@@ -200,7 +231,10 @@ export async function planBinding(
 
   const creating = !existsSync(filePath)
   const parsed = creating ? null : parseEnvContent(readFileSync(filePath, 'utf-8'))
-  const localValues = parsed ? toValueMap(parsed) : new Map<string, string>()
+  const fileValues = parsed ? toValueMap(parsed) : new Map<string, string>()
+  const encrypted = hasCiphertext(fileValues) || manifestSaysEncrypted(project.path, binding.file)
+  // Encrypted mode: plan and merge on plaintext, decrypted in memory only.
+  const localValues = encrypted ? await decryptValues(client, scope, fileValues) : fileValues
   const prior: BindingState | undefined = state.bindings[key]
   const actions: SyncAction[] = []
   const revealed = new Map<string, string>()
@@ -288,5 +322,6 @@ export async function planBinding(
     remoteVersions,
     localValues,
     revealed,
+    ...(encrypted ? { encrypted, fileValues } : {}),
   }
 }

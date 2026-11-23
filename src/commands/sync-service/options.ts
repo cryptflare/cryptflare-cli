@@ -3,6 +3,7 @@
 import { CAPTURE_MODES, isCaptureMode, type CaptureMode } from '@/lib/capture'
 import { getRegistryPath, loadRegistry, type SyncProject } from '@/lib/sync-registry'
 import { EXIT_CODES } from '@/lib/exit-codes'
+import { SYSTEMD_SERVICE_NAME } from '@/lib/service/spec'
 
 export const DEFAULT_INTERVAL_S = 60
 export const MIN_INTERVAL_S = 15
@@ -10,7 +11,7 @@ export const BACKOFF_CEILING_MS = 600_000
 export const BACKOFF_MULTIPLIER = 2
 export const NO_CHANGE_GRACE = 5
 const JITTER_PCT = 0.1
-export const SERVICE_NAME = 'cryptflare-sync.service'
+export const SERVICE_NAME = SYSTEMD_SERVICE_NAME
 /** Consecutive passes in which every binding was refused as unauthenticated before the loop gives up. */
 export const AUTH_FAILURE_LIMIT = 3
 /** sysexits EX_CONFIG. The unit lists it under RestartPreventExitStatus. */

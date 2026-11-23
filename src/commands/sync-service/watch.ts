@@ -2,6 +2,13 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
+import { DEVICE_SERVICE_STATE } from '@/lib/device-contract'
+import {
+  createDeviceReporter,
+  currentDeviceReport,
+  lastPassOf,
+  reportDeviceSafely,
+} from '@/lib/device-report'
 import { requirePermission } from '@/lib/permissions'
 import * as output from '@/lib/output'
 import { type FileWake } from '@/lib/file-wake'
@@ -79,6 +86,7 @@ export const watchCommand = new Command('watch')
       }
 
       const loggedSkips = new Set<string>()
+      const reportDevice = createDeviceReporter()
       let backoffMs = baseIntervalMs
       let idlePasses = 0
       let authFailedPasses = 0
@@ -189,10 +197,17 @@ export const watchCommand = new Command('watch')
           summary.bindings > 0 && summary.authFailures === summary.bindings
             ? authFailedPasses + 1
             : 0
+        const lastPass = summary.bindings > 0 ? lastPassOf(summary) : undefined
         if (authFailedPasses >= AUTH_FAILURE_LIMIT) {
           output.printError(chalk.red(needsLoginMessage(AUTH_FAILURE_LIMIT)))
+          // Best effort: the token was refused, so this is likely refused too.
+          await reportDeviceSafely(
+            currentDeviceReport({ serviceState: DEVICE_SERVICE_STATE.NEEDS_LOGIN, lastPass }),
+          )
           process.exit(EXIT_NEEDS_LOGIN)
         }
+        // Fire and forget: the reporter throttles itself and never throws.
+        void reportDevice(currentDeviceReport({ running: true, lastPass }))
 
         if (summary.changed || summary.failures > 0) {
           // Activity (or trouble) means poll tight again - a developer who just
@@ -225,6 +240,9 @@ export const watchCommand = new Command('watch')
       }
 
       fileWake?.close()
+      // Stopped on purpose (systemctl stop, Ctrl-C): say so, so the dashboard
+      // does not show a stopped loop as online until it times out.
+      await reportDeviceSafely(currentDeviceReport({ serviceState: DEVICE_SERVICE_STATE.STOPPED }))
       output.printError(chalk.dim('[sync] stopped'))
     } catch (err) {
       output.handleError(err)

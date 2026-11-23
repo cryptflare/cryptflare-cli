@@ -139,7 +139,7 @@ export function parseEnvContent(content: string): ParsedEnvFile {
  * concatenation trick. There `$`, backtick, `"` and `\` are escaped, which
  * this parser and a shell both undo.
  */
-function renderValue(value: string): string {
+export function renderValue(value: string): string {
   if (value === '') return "''"
 
   if (value.includes("'") || value.includes('\n')) {

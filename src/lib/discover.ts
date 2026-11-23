@@ -122,7 +122,8 @@ function kindOf(name: string): string | null {
   return null
 }
 
-function appOf(directory: string): string {
+/** The app a directory belongs to: `root`, `api` for `apps/api`, `pkg-x` for `packages/x`. */
+export function appOf(directory: string): string {
   if (directory === '' || directory === '.') return 'root'
   const segments = directory.split('/')
   if (segments[0] === 'apps' && segments.length > 1) segments.shift()

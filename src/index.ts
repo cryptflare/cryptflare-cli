@@ -5,6 +5,7 @@ import { BRAND } from './_vendored/brand'
 import { authCommand, loginCommand, logoutCommand } from '@/commands/auth'
 import { secretCommand } from '@/commands/secret'
 import { runCommand, envCommand } from '@/commands/run'
+import { addEnvFileCommands } from '@/commands/env-files'
 import { podCommand } from '@/commands/pod'
 import { orgCommand } from '@/commands/org'
 import { workspaceCommand } from '@/commands/workspace'
@@ -17,6 +18,7 @@ import { whoamiCommand } from '@/commands/whoami'
 import { statusCommand } from '@/commands/status'
 import { pullCommand, pushCommand, diffCommand, daemonCommand } from '@/commands/sync'
 import { syncCommand } from '@/commands/sync-service'
+import { deviceCommand } from '@/commands/device'
 import { telemetryCommand } from '@/commands/telemetry'
 import { updateCommand } from '@/commands/update'
 import { initCommand } from '@/commands/init'
@@ -54,13 +56,14 @@ program.addCommand(daemonCommand)
 
 // Sync service (multi-project, stateful, bidirectional)
 program.addCommand(syncCommand)
+program.addCommand(deviceCommand)
 
 // Import from external sources
 program.addCommand(importCommand)
 
 // Inject & export
 program.addCommand(runCommand)
-program.addCommand(envCommand)
+program.addCommand(addEnvFileCommands(envCommand))
 
 // Dynamic secrets
 program.addCommand(dynamicCommand)

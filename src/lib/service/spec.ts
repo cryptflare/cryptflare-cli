@@ -6,6 +6,19 @@
  * What they run is identical, and is described once here.
  */
 
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+import { SYNC_SERVICE_NAMES } from '@/lib/device-contract'
+
+/** The systemd user unit's name. */
+export const SYSTEMD_SERVICE_NAME = SYNC_SERVICE_NAMES.systemdUnit
+
+/** Where `cf sync install-service` writes the systemd user unit. */
+export function systemdUnitPath(home: string = homedir()): string {
+  return join(home, '.config', 'systemd', 'user', SYSTEMD_SERVICE_NAME)
+}
+
 export type ServiceSpec = {
   /** Absolute path of the Node binary. Services get no PATH lookup. */
   nodePath: string

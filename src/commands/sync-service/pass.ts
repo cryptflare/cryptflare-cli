@@ -3,6 +3,8 @@
 import chalk from 'chalk'
 import prompts from 'prompts'
 import { getClient } from '@/lib/api'
+import type { DeviceErrorCode } from '@/lib/device-contract'
+import { classifyError } from '@/lib/device-report'
 import * as output from '@/lib/output'
 import { collidingFiles, describeCollision, findBindingCollisions } from '@/lib/binding-collisions'
 import { isPlanLimitError, upgradeHint } from '@/lib/plan-allowance'
@@ -140,6 +142,8 @@ type PassSummary = {
   /** Files whose new keys were not uploaded because the plan's secret limit is reached. */
   planLimited: number
   changed: boolean
+  /** The first binding failure as a short code, for the device report. Never the message. */
+  errorCode?: DeviceErrorCode | undefined
 }
 
 /**
@@ -258,6 +262,7 @@ export async function runPass(opts: PassOptions): Promise<PassSummary> {
           continue
         }
         summary.failures++
+        summary.errorCode ??= classifyError(err)
         if (errorStatus(err) === 401) summary.authFailures++
         // One unreachable workspace must not stop the other projects. Log and
         // carry on; the next pass retries from the same baseline.

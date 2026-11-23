@@ -43,6 +43,12 @@ export type ManifestBinding = {
    * `capture`, then to `off`. See `./capture.ts`.
    */
   capture?: CaptureMode
+  /**
+   * The file holds `cf:v1` ciphertext instead of plaintext. `cf sync` then
+   * encrypts what it writes, and `cf run` decrypts it in memory. See
+   * `docs/guides/encrypted-env-files.md`.
+   */
+  encrypted?: boolean
 }
 
 export type ProjectManifest = {
@@ -174,12 +180,17 @@ export function parseManifest(raw: unknown): LoadedManifest {
 
     const pod = optionalString(b['pod'], `${at}.pod`)
     const capture = readCapture(b['capture'], `${at}.capture`) ?? defaultCapture
+    const encrypted = b['encrypted']
+    if (encrypted !== undefined && typeof encrypted !== 'boolean') {
+      throw new ManifestError(`${at}.encrypted must be true or false when present`)
+    }
     return {
       file,
       workspace,
       environment,
       ...(pod ? { pod } : {}),
       ...(capture ? { capture } : {}),
+      ...(encrypted ? { encrypted } : {}),
     }
   })
 
@@ -263,6 +274,7 @@ export function renderManifest(manifest: ProjectManifest): string {
       : {}),
     ...(b.pod ? { pod: b.pod } : {}),
     ...(b.capture && b.capture !== manifest.capture ? { capture: b.capture } : {}),
+    ...(b.encrypted ? { encrypted: true } : {}),
   }))
 
   return `${JSON.stringify(out, null, 2)}\n`

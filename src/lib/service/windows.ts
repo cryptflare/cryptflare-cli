@@ -11,16 +11,17 @@
 
 import { join } from 'node:path'
 
+import { SYNC_SERVICE_NAMES } from '@/lib/device-contract'
 import { watchArgs, type ServiceSpec } from '@/lib/service/spec'
 
-export const WINDOWS_TASK_NAME = 'CryptFlare Sync'
+export const WINDOWS_TASK_NAME = SYNC_SERVICE_NAMES.windowsTask
 
 export function windowsLauncherPath(configDir: string): string {
   return join(configDir, 'sync-service.vbs')
 }
 
 export function windowsLogPath(configDir: string): string {
-  return join(configDir, 'sync-service.log')
+  return join(configDir, SYNC_SERVICE_NAMES.windowsLog)
 }
 
 /**

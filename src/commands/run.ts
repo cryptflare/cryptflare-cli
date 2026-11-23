@@ -33,6 +33,15 @@ import { Command } from 'commander'
 
 import { getClient } from '@/lib/api'
 import { renderEnvFile } from '@/lib/env-file'
+import { runChildWithCleanup } from '@/lib/local-env/child'
+import { Keyring } from '@/lib/local-env/keyring'
+import {
+  materializeMode,
+  prepareRun,
+  type MaterializeMode,
+  type PreparedRun,
+} from '@/lib/local-env/prepare-run'
+import { loadLocalFiles, type LocalFilesPlan } from '@/lib/local-env/run-files'
 import { resolveContext, type ResolvedContext } from '@/lib/resolve'
 import { revealSecrets } from '@/lib/reveal'
 import * as output from '@/lib/output'
@@ -50,6 +59,45 @@ async function fetchEnv(ctx: ResolvedContext): Promise<Record<string, string>> {
   // One request for the whole environment instead of a list plus one reveal
   // per key - `cf run` starts a process, so its latency is felt every time.
   return Object.fromEntries(await revealSecrets(client, scope))
+}
+
+const NO_LOCAL_FILES: LocalFilesPlan = { env: {}, materialize: [], devVars: [], restored: [] }
+
+/**
+ * Decrypts the bound encrypted files in memory and works out what the child
+ * needs for them. A key that cannot be fetched stops the run here, before
+ * anything starts: an app must not come up with half its configuration.
+ */
+async function prepareLocalFiles(
+  ctx: ResolvedContext,
+  argv: string[],
+  opts: { localFiles?: boolean; file?: string[] },
+  mode: MaterializeMode | null,
+): Promise<{ values: Record<string, string>; run: PreparedRun }> {
+  let local = NO_LOCAL_FILES
+  if (opts.localFiles !== false) {
+    try {
+      local = await loadLocalFiles({
+        cwd: process.cwd(),
+        scope: {
+          org: ctx.org,
+          workspace: ctx.workspace,
+          env: ctx.env,
+          ...(ctx.pod ? { pod: ctx.pod } : {}),
+        },
+        files: opts.file ?? [],
+        keyring: new Keyring(getClient()),
+      })
+    } catch (err) {
+      output.printError(
+        'cf run: the encrypted local files could not be decrypted. Nothing was started.',
+      )
+      throw err
+    }
+  }
+  const run = prepareRun(argv, local, mode)
+  for (const note of run.notes) output.printError(`cf run: ${note}`)
+  return { values: local.env, run }
 }
 
 /** Signal names map to 128+n by convention, matching what a shell reports. */
@@ -70,6 +118,17 @@ export const runCommand = new Command('run')
   .option('-o, --org <id>', 'Organisation ID')
   .option('-b, --binding <file>', 'Use the scope of this bound file from .cryptflare.json')
   .option('--override', 'Let secrets take precedence over existing environment variables')
+  .option(
+    '--file <path>',
+    'Encrypted local file to decrypt into the command (repeatable). Default: the bound files around this directory',
+    (value: string, previous: string[] = []) => [...previous, value],
+  )
+  .option(
+    '--materialize [mode]',
+    'Write plaintext for files the tool reads itself: "in-place" (default, restored on exit) or "temp"',
+  )
+  .option('--files-only', 'Use only the local files, not the values stored in CryptFlare')
+  .option('--no-local-files', 'Ignore encrypted local files')
   // Without this, a flag intended for the child (`-v`, `--watch`) is parsed as
   // one of ours and rejected.
   .passThroughOptions()
@@ -86,6 +145,11 @@ Examples:
   cf run -b apps/api/.dev.vars -- wrangler dev
   cf run -w my-app -e production -- ./deploy.sh
 
+Encrypted local files (cf:v1 values, see cf env encrypt) are decrypted in
+memory with a key fetched once for this run; no plaintext file is written.
+  cf run -- wrangler dev                    adds --env-file for the encrypted .dev.vars
+  cf run --materialize -- streamlit run app.py   plaintext secrets.toml while it runs
+
 The command's exit code is propagated, so this composes with CI and with
 shell && chains.`,
   )
@@ -97,15 +161,33 @@ shell && chains.`,
       }
 
       const ctx = resolveContext(opts)
-      const env = await fetchEnv(ctx)
+      const mode = materializeMode(opts.materialize)
+      const vault = opts.filesOnly ? {} : await fetchEnv(ctx)
+      const prepared = await prepareLocalFiles(ctx, args, opts, mode)
 
       // Default: the ambient environment wins, so a locally exported override
       // is respected. `--override` flips it for the "trust the vault" case.
-      const mergedEnv = opts.override ? { ...process.env, ...env } : { ...env, ...process.env }
+      // Decrypted local files sit above the vault: they are what this
+      // checkout says.
+      const env = { ...vault, ...prepared.values }
+      const mergedEnv = {
+        ...(opts.override ? { ...process.env, ...env } : { ...env, ...process.env }),
+        ...prepared.run.env,
+      }
 
-      const [command, ...commandArgs] = args
+      const [command, ...commandArgs] = prepared.run.args
       if (command === undefined)
         output.usageError('Missing command. Usage: cf run -- <command> [args...]')
+
+      // Decrypted local values live only in the child. With `spawn.sync` a
+      // SIGTERM to cf (an IDE's stop button, a process manager) killed cf and
+      // left the child running on its own; the async path forwards it.
+      const { cleanup } = prepared.run
+      if (cleanup || Object.keys(prepared.values).length > 0) {
+        process.exit(
+          await runChildWithCleanup(command, commandArgs, mergedEnv, cleanup ?? (() => undefined)),
+        )
+      }
 
       // No shell on POSIX: argv is passed through as a vector, so quoting,
       // spaces and shell metacharacters are inert. On Windows most tools on

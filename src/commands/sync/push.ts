@@ -9,6 +9,7 @@ import * as output from '@/lib/output'
 import * as progress from '@/lib/progress'
 import { chunk, validateSecrets } from '@/lib/secret-validation'
 import { parseEnvFile } from '@/commands/sync/env-format'
+import { decryptValues } from '@/lib/local-env/sync-codec'
 
 export const pushCommand = new Command('push')
   .description('Push local .env file to remote environment')
@@ -29,7 +30,8 @@ export const pushCommand = new Command('push')
       }
 
       const content = readFileSync(opts.file, 'utf-8')
-      const local = parseEnvFile(content)
+      // `cf:v1` values are decrypted in memory: ciphertext is never uploaded as a value.
+      const local = await decryptValues(client, scope, parseEnvFile(content))
 
       if (local.size === 0) {
         output.info('No secrets found in file.')

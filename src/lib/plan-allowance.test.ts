@@ -122,12 +122,42 @@ describe('parsePlanAllowance', () => {
     expect(parsePlanAllowance({ plan: 'free' })).toBeNull()
     expect(parsePlanAllowance(null)).toBeNull()
   })
+
+  it('reads the usage endpoint, which nests used and limit per resource', () => {
+    const allowance = parsePlanAllowance({
+      plan: 'free',
+      usage: {
+        workspaces: { used: 1, limit: FREE.workspaces, remaining: 0 },
+        environments: { used: 0, limit: FREE.environments, remaining: 2 },
+      },
+    })
+    expect(allowance?.limits).toEqual(FREE)
+    expect(allowance?.remaining).toEqual({ workspaces: 0, environments: 2 })
+  })
 })
 
 describe('loadPlanAllowance', () => {
   it('is unknown, not zero, when the token may not read billing', async () => {
     const { client } = fake({ subscription: 'forbidden' })
     expect(await loadPlanAllowance(client, 'org_1')).toBeNull()
+  })
+
+  it('falls back to the usage endpoint when billing is forbidden', async () => {
+    const { client } = fake({ subscription: 'forbidden' })
+    const usage = {
+      get: async () => ({
+        plan: 'free',
+        usage: {
+          workspaces: { used: 1, limit: 1 },
+          environments: { used: 1, limit: 2 },
+        },
+      }),
+    }
+    const allowance = await loadPlanAllowance(
+      { ...client, usage } as unknown as CryptFlare,
+      'org_1',
+    )
+    expect(allowance?.remaining).toEqual({ workspaces: 0, environments: 1 })
   })
 })
 

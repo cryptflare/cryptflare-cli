@@ -2,13 +2,14 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, userInfo } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { userInfo } from 'node:os'
+import { dirname, resolve } from 'node:path'
 import { Command } from 'commander'
 import chalk from 'chalk'
+import { currentDeviceReport, reportDeviceSafely } from '@/lib/device-report'
 import * as output from '@/lib/output'
 import { launchdLogPath, launchdPlistPath, renderLaunchdPlist } from '@/lib/service/launchd'
-import type { ServiceSpec } from '@/lib/service/spec'
+import { systemdUnitPath, type ServiceSpec } from '@/lib/service/spec'
 import {
   quoteWindowsArg,
   renderWindowsLauncher,
@@ -144,8 +145,8 @@ function installSystemd(spec: ServiceSpec, opts: { enable?: boolean; print?: boo
     )
   }
 
-  const unitDir = join(homedir(), '.config', 'systemd', 'user')
-  const unitPath = join(unitDir, SERVICE_NAME)
+  const unitPath = systemdUnitPath()
+  const unitDir = dirname(unitPath)
   mkdirSync(unitDir, { recursive: true })
   writeFileSync(unitPath, unit, { encoding: 'utf-8', mode: 0o644 })
   output.success(`Wrote ${chalk.bold(unitPath)}`)
@@ -269,7 +270,7 @@ export const installServiceCommand = new Command('install-service')
   .option('--exec-path <path>', 'Path to the cf entry point (defaults to the running one)')
   .option('--enable', 'Also register and start the service now')
   .option('--print', 'Print the service definition to stdout instead of writing it')
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const platform = requireServicePlatform()
       const spec = serviceSpecFrom(opts)
@@ -278,6 +279,8 @@ export const installServiceCommand = new Command('install-service')
       if (platform === 'linux') installSystemd(spec, opts)
       else if (platform === 'darwin') installLaunchd(spec, opts)
       else installWindowsTask(spec, opts)
+      // The devices page shows the new service at once, not at the first pass.
+      if (!opts.print) await reportDeviceSafely(currentDeviceReport({}))
     } catch (err) {
       output.handleError(err)
     }
@@ -301,14 +304,14 @@ function runQuietly(command: string, args: string[]): void {
 
 export const uninstallServiceCommand = new Command('uninstall-service')
   .description('Stop the background sync service and remove what `install-service` wrote')
-  .action(() => {
+  .action(async () => {
     try {
       const platform = requireServicePlatform()
       let removed: boolean
 
       if (platform === 'linux') {
         runQuietly('systemctl', ['--user', 'disable', '--now', SERVICE_NAME])
-        removed = removeIfPresent(join(homedir(), '.config', 'systemd', 'user', SERVICE_NAME))
+        removed = removeIfPresent(systemdUnitPath())
         runQuietly('systemctl', ['--user', 'daemon-reload'])
       } else if (platform === 'darwin') {
         runQuietly('launchctl', ['unload', '-w', launchdPlistPath()])
@@ -325,6 +328,7 @@ export const uninstallServiceCommand = new Command('uninstall-service')
           'Background sync service removed. Registered projects and saved login are untouched.',
         )
       else output.info('No background sync service was installed.')
+      await reportDeviceSafely(currentDeviceReport({}))
     } catch (err) {
       output.handleError(err)
     }

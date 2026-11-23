@@ -12,6 +12,7 @@ import { collidingFiles, describeCollision, findBindingCollisions } from '@/lib/
 import { describePlanRefusal, provisionWithinPlan } from '@/lib/plan-allowance'
 import { loadRegistry, saveRegistry, type SyncProject } from '@/lib/sync-registry'
 import { revealSecrets } from '@/lib/reveal'
+import { decryptValues, encryptValues, hasCiphertext } from '@/lib/local-env/sync-codec'
 import { newScopeCache, seedFromValues } from '@/lib/provision'
 import { applyEnvChanges, parseEnvContent, renderEnvFile, toValueMap } from '@/lib/env-file'
 import { MANIFEST_FILENAME, hasManifest, loadManifest } from '@/lib/project-manifest'
@@ -176,9 +177,14 @@ you agree. New project, start to finish:
             if (createdEnvironment) madeEnv++
 
             const target = join(root, binding.file)
-            const values = existsSync(target)
-              ? toValueMap(parseEnvContent(readFileSync(target, 'utf-8')))
-              : new Map<string, string>()
+            // An encrypted file is decrypted in memory: ciphertext is never a value to push.
+            const values = await decryptValues(
+              client,
+              scope,
+              existsSync(target)
+                ? toValueMap(parseEnvContent(readFileSync(target, 'utf-8')))
+                : new Map<string, string>(),
+            )
             const { created, updated } = await seedFromValues(client, scope, values)
             pushed += created + updated
 
@@ -226,7 +232,15 @@ you agree. New project, start to finish:
               ...(binding.pod ? { podId: binding.pod } : {}),
             }
 
-            const secrets = await revealSecrets(client, scope)
+            const revealed = await revealSecrets(client, scope)
+            const existing = existsSync(target)
+              ? toValueMap(parseEnvContent(readFileSync(target, 'utf-8')))
+              : new Map<string, string>()
+            // An encrypted binding gets ciphertext, never plaintext, on disk.
+            const secrets =
+              binding.encrypted || hasCiphertext(existing)
+                ? await encryptValues(client, scope, revealed, existing)
+                : revealed
 
             mkdirSync(dirname(target), { recursive: true })
             if (existsSync(target)) {

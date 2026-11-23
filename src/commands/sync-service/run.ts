@@ -2,6 +2,7 @@
 
 import { Command } from 'commander'
 import chalk from 'chalk'
+import { currentDeviceReport, lastPassOf, reportDeviceSafely } from '@/lib/device-report'
 import { requirePermission } from '@/lib/permissions'
 import * as output from '@/lib/output'
 import { findNewBindings } from '@/lib/rediscover'
@@ -77,6 +78,9 @@ export const runCommand = new Command('run')
       })
 
       if (opts.dryRun) return
+      await reportDeviceSafely(
+        currentDeviceReport({ lastPass: summary.bindings > 0 ? lastPassOf(summary) : undefined }),
+      )
       if (summary.failures > 0)
         output.warn(`${summary.failures} binding(s) failed. See errors above.`)
       if (summary.collisions > 0) {

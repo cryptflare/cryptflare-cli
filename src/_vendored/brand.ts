@@ -68,6 +68,12 @@ export const BRAND = {
   domain: 'cryptflare.com',
   urls: PROD_URLS,
 
+  /** Paths on the vault app (`urls.app`) that other apps link to. */
+  paths: {
+    /** Sign-in and sign-up in one: verifying the emailed code creates the account on a first sign-in. */
+    signIn: '/login',
+  },
+
   support: {
     email: 'support@cryptflare.com',
     security: 'security@cryptflare.com',
@@ -82,7 +88,7 @@ export const BRAND = {
   },
 
   socials: {
-    github: 'https://github.com/BuunGroupCore/cryptflare-platform',
+    github: 'https://github.com/cryptflare',
     x: 'https://x.com/cryptflare',
     discord: 'https://discord.gg/Gxfrv6EKGU',
   },
