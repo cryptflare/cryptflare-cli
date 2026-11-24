@@ -10,8 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { handleError, print, MARK } from '@/lib/output'
 import * as progress from '@/lib/progress'
 import { readString } from '@/lib/guards'
-
-const NPM_PACKAGE = '@cryptflare/cli'
+import { fetchLatestVersion, NPM_PACKAGE } from '@/lib/npm-latest'
 
 export const updateCommand = new Command('update')
   .description('Self-update the CLI to the latest published version')
@@ -21,21 +20,12 @@ export const updateCommand = new Command('update')
       const installed = (await import('@/version')).VERSION
       progress.start(`Checking npm for the latest ${NPM_PACKAGE}...`)
 
-      const res = await fetch(
-        `https://registry.npmjs.org/${encodeURIComponent(NPM_PACKAGE)}/latest`,
-        {
-          headers: { accept: 'application/json' },
-        },
-      )
-      if (!res.ok) {
-        progress.fail(`Could not reach npm: HTTP ${res.status}`)
+      const answer = await fetchLatestVersion()
+      if (!answer.ok) {
+        progress.fail(answer.reason)
         process.exit(1)
       }
-      const latest = readString(await res.json(), 'version')
-      if (latest === undefined) {
-        progress.fail('npm returned no version for the package')
-        process.exit(1)
-      }
+      const latest = answer.version
       progress.stop()
 
       if (latest === installed) {

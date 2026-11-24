@@ -1,5 +1,11 @@
 # @cryptflare/cli
 
+## 0.11.1
+
+### Patch Changes
+
+- 71b5387: `cf update` and `cf doctor` give up on the npm registry after 10 seconds instead of waiting on a hung connection.
+
 ## 0.11.0
 
 ### Minor Changes

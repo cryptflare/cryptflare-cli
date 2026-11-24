@@ -9,7 +9,7 @@ import { getToken, getOrg, getDefault, getConfigPath } from '@/lib/config'
 import * as progress from '@/lib/progress'
 import { VERSION } from '@/version'
 import * as output from '@/lib/output'
-import { readString } from '@/lib/guards'
+import { fetchLatestVersion } from '@/lib/npm-latest'
 
 type CheckStatus = 'pass' | 'warn' | 'fail' | 'skip'
 
@@ -19,8 +19,6 @@ type Check = {
   detail?: string
   hint?: string
 }
-
-const NPM_PACKAGE = '@cryptflare/cli'
 
 export const doctorCommand = new Command('doctor')
   .description(
@@ -162,27 +160,16 @@ function checkContext(): Check[] {
 
 async function checkLatestVersion(): Promise<Check> {
   try {
-    const res = await fetch(
-      `https://registry.npmjs.org/${encodeURIComponent(NPM_PACKAGE)}/latest`,
-      {
-        headers: { accept: 'application/json' },
-      },
-    )
-    if (!res.ok) {
-      return {
-        name: 'CLI version',
-        status: 'warn',
-        detail: `npm registry responded ${res.status}`,
-      }
-    }
-    const latest = readString(await res.json(), 'version')
+    const answer = await fetchLatestVersion()
+    if (!answer.ok) return { name: 'CLI version', status: 'warn', detail: answer.reason }
+    const latest = answer.version
     if (latest === VERSION) {
       return { name: 'CLI version', status: 'pass', detail: `${VERSION} (latest)` }
     }
     return {
       name: 'CLI version',
       status: 'warn',
-      detail: `installed ${VERSION}, npm latest ${latest ?? 'unknown'}`,
+      detail: `installed ${VERSION}, npm latest ${latest}`,
       hint: 'Run `cf update` to upgrade.',
     }
   } catch (err) {
